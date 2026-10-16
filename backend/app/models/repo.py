@@ -1,7 +1,7 @@
 import datetime as dt
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, ForeignKey, String
+from sqlalchemy import BigInteger, ForeignKey, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -32,6 +32,9 @@ class Repo(Base):
     created_at: Mapped[dt.datetime]
     # Null for repos that have never been pushed to.
     pushed_at: Mapped[dt.datetime | None]
+    # Every commit on the default branch. daily_commits can hold fewer, because fetched history
+    # is capped per repo, so use this for anything that needs the true total.
+    total_commits: Mapped[int] = mapped_column(server_default=text("0"))
 
     user: Mapped["GithubUser"] = relationship(back_populates="repos", lazy="raise")
     languages: Mapped[list["RepoLanguage"]] = relationship(

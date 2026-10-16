@@ -18,9 +18,10 @@ class AppError(Exception):
     status_code: int = 500
     code: str = "internal_error"
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, headers: dict[str, str] | None = None) -> None:
         super().__init__(message)
         self.message = message
+        self.headers = headers
 
 
 class NotFoundError(AppError):
@@ -33,14 +34,36 @@ class ServiceUnavailableError(AppError):
     code = "service_unavailable"
 
 
-def error_response(status_code: int, code: str, message: str) -> JSONResponse:
+class UnknownGitHubUserError(NotFoundError):
+    code = "github_user_not_found"
+
+
+class JobNotFoundError(NotFoundError):
+    code = "job_not_found"
+
+
+class GitHubRateLimitedError(ServiceUnavailableError):
+    code = "github_rate_limited"
+
+
+class GitHubUnavailableError(ServiceUnavailableError):
+    code = "github_unavailable"
+
+
+class QueueUnavailableError(ServiceUnavailableError):
+    code = "queue_unavailable"
+
+
+def error_response(
+    status_code: int, code: str, message: str, headers: dict[str, str] | None = None
+) -> JSONResponse:
     body = ErrorResponse(error=ErrorBody(code=code, message=message))
-    return JSONResponse(status_code=status_code, content=body.model_dump())
+    return JSONResponse(status_code=status_code, content=body.model_dump(), headers=headers)
 
 
 async def _handle_app_error(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, AppError)
-    return error_response(exc.status_code, exc.code, exc.message)
+    return error_response(exc.status_code, exc.code, exc.message, exc.headers)
 
 
 _HTTP_ERROR_CODES = {404: "not_found", 405: "method_not_allowed"}

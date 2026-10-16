@@ -1,5 +1,23 @@
-# Local development stack. The worker (phase 3) and frontend (phase 6) services are added in
-# their phases: ARQ refuses to start without any job functions registered.
+# Local development stack. The frontend service arrives in phase 6.
+
+# Settings shared by the api and worker services (a YAML anchor, merged in with `<<:`).
+x-backend: &backend
+  build: ./backend
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    # Inside the compose network, services reach each other by service name, not localhost.
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cities}:${POSTGRES_PASSWORD:-cities}@postgres:5432/${POSTGRES_DB:-cities}
+    REDIS_URL: redis://redis:6379/0
+  volumes:
+    - ./backend:/app
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -28,14 +46,7 @@ services:
       retries: 10
 
   api:
-    build: ./backend
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      # Inside the compose network, services reach each other by service name, not localhost.
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cities}:${POSTGRES_PASSWORD:-cities}@postgres:5432/${POSTGRES_DB:-cities}
-      REDIS_URL: redis://redis:6379/0
+    <<: *backend
     # Apply migrations, then serve with auto-reload. Uvicorn's default polling reloader works on
     # Windows bind mounts, where file-change events are unreliable.
     command: >
@@ -43,13 +54,12 @@ services:
              uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000 --reload"
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend:/app
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+
+  worker:
+    <<: *backend
+    # Runs ingestion jobs. It does not reload on code changes: restart it with
+    # `docker compose restart worker` after editing backend code.
+    command: arq app.worker.WorkerSettings
 
 volumes:
   pgdata:

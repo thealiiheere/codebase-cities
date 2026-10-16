@@ -5,12 +5,10 @@ from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+from app.usernames import LOGIN_MAX_LENGTH
 
 if TYPE_CHECKING:
     from app.models.repo import Repo
-
-# GitHub caps usernames at 39 characters.
-LOGIN_MAX_LENGTH = 39
 
 
 class GithubUser(Base):

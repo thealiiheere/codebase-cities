@@ -5,13 +5,24 @@ from pathlib import Path
 import httpx
 import pytest
 import respx
+from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
+from redis.asyncio import Redis
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from app.config import Settings
+from app.db import create_session_factory
 from app.github.client import GitHubClient
 from app.github.transport import GitHubTransport
 from app.main import create_app
+from app.models import Base
 from tests.github_fakes import FakeTime
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -48,6 +59,9 @@ def alembic_config() -> Config:
     return Config(str(BACKEND_DIR / "alembic.ini"))
 
 
+# --- GitHub client -----------------------------------------------------------------------------
+
+
 @pytest.fixture
 def fake_time() -> FakeTime:
     return FakeTime()
@@ -75,10 +89,64 @@ def github(github_transport: GitHubTransport) -> GitHubClient:
     return GitHubClient(github_transport, max_commits_per_repo=5000)
 
 
-@pytest.fixture
+# --- Real PostgreSQL and Redis (integration tests) ---------------------------------------------
+# These need TEST_DATABASE_URL / TEST_REDIS_URL pointing at disposable servers; every test
+# depending on them is skipped otherwise. CI always provides both. The data is wiped after
+# each test, so never point these at a database or Redis you care about.
+
+
+@pytest.fixture(scope="session")
 def test_database_url() -> str:
-    """URL of a disposable Postgres database. Tests using it are skipped when it is unset."""
     url = os.environ.get("TEST_DATABASE_URL")
     if not url:
         pytest.skip("TEST_DATABASE_URL is not set")
     return url
+
+
+@pytest.fixture(scope="session")
+def migrated_database_url(test_database_url: str) -> str:
+    """The test database with every migration applied, once per test session."""
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", test_database_url)
+    command.upgrade(config, "head")
+    return test_database_url
+
+
+@pytest.fixture
+async def db_engine(migrated_database_url: str) -> AsyncIterator[AsyncEngine]:
+    engine = create_async_engine(migrated_database_url)
+    yield engine
+    # Empty every table so each test starts clean. RESTART IDENTITY resets id counters.
+    tables = ", ".join(Base.metadata.tables)
+    async with engine.begin() as connection:
+        await connection.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
+    await engine.dispose()
+
+
+@pytest.fixture
+def session_factory(db_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    return create_session_factory(db_engine)
+
+
+@pytest.fixture
+async def session(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[AsyncSession]:
+    async with session_factory() as session:
+        yield session
+
+
+@pytest.fixture(scope="session")
+def test_redis_url() -> str:
+    url = os.environ.get("TEST_REDIS_URL")
+    if not url:
+        pytest.skip("TEST_REDIS_URL is not set")
+    return url
+
+
+@pytest.fixture
+async def redis_client(test_redis_url: str) -> AsyncIterator[Redis]:
+    redis = Redis.from_url(test_redis_url, decode_responses=True)
+    yield redis
+    await redis.flushdb()
+    await redis.aclose()

@@ -57,7 +57,7 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
-    "integration: needs a real PostgreSQL (set TEST_DATABASE_URL); skipped otherwise",
+    "integration: needs real PostgreSQL / Redis (TEST_DATABASE_URL / TEST_REDIS_URL); skipped otherwise",
 ]
 
 [dependency-groups]

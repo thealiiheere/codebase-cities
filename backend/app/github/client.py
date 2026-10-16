@@ -7,7 +7,6 @@ Usage:
 
 import datetime as dt
 import itertools
-import re
 from typing import Any, Self, cast
 
 from app.config import Settings
@@ -35,10 +34,7 @@ from app.github.queries import (
 )
 from app.github.ratelimit import RateLimitState
 from app.github.transport import GitHubTransport, GraphQLResult
-
-# GitHub usernames: 1-39 alphanumerics or single hyphens, not starting or ending with a hyphen.
-# Checking before any request also keeps odd input (like "../") out of REST paths.
-LOGIN_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
+from app.usernames import is_valid_login
 
 # Repos per batched history query. Large enough to save quota, small enough to stay well under
 # GitHub's 10-second query timeout.
@@ -191,7 +187,8 @@ class _HistoryProgress:
 
 
 def _validate_login(login: str) -> None:
-    if not LOGIN_PATTERN.fullmatch(login):
+    # Checking before any request also keeps odd input (like "../") out of REST paths.
+    if not is_valid_login(login):
         raise GitHubUserNotFoundError(login, "is not a valid GitHub username")
 
 

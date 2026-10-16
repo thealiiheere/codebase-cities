@@ -2,11 +2,11 @@ import datetime as dt
 import uuid
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, Enum, String, Text, func
+from sqlalchemy import CheckConstraint, Enum, Index, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
-from app.models.user import LOGIN_MAX_LENGTH
+from app.usernames import LOGIN_MAX_LENGTH
 
 
 class JobStatus(StrEnum):
@@ -17,11 +17,25 @@ class JobStatus(StrEnum):
     FAILED = "failed"
 
 
+# A job in one of these states still has work to do.
+ACTIVE_JOB_STATUSES = (JobStatus.QUEUED, JobStatus.FETCHING, JobStatus.BUILDING)
+
+
 class Job(Base):
     """One ingestion run for a username, polled by the frontend."""
 
     __tablename__ = "jobs"
-    __table_args__ = (CheckConstraint("username = lower(username)", name="username_lowercase"),)
+    __table_args__ = (
+        CheckConstraint("username = lower(username)", name="username_lowercase"),
+        # A partial unique index: at most one *active* job per username. Two simultaneous
+        # requests can't both start an ingestion; the second insert fails and reuses the first.
+        Index(
+            "uq_jobs_username_active",
+            "username",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'fetching', 'building')"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     username: Mapped[str] = mapped_column(String(LOGIN_MAX_LENGTH), index=True)

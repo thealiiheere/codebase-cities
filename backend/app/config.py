@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     github_max_retries: int = Field(default=3, ge=0, le=10)
     github_timeout_seconds: float = Field(default=30, gt=0)
 
+    # A user's stored data counts as fresh this long after ingestion; later requests re-fetch.
+    refresh_after_hours: float = Field(default=12, gt=0)
+
+    # Jobs per worker process. Kept low: GitHub's secondary limits punish bursts of parallel calls.
+    worker_max_jobs: int = Field(default=2, ge=1)
+    # ARQ cancels a job that runs longer than this.
+    worker_job_timeout_seconds: int = Field(default=600, ge=30)
+    # An active job older than this is presumed dead (e.g. the worker crashed) and marked failed,
+    # so the user can start a new one. Keep it above worker_job_timeout_seconds.
+    job_stale_after_minutes: float = Field(default=15, gt=0)
+
 
 @lru_cache
 def get_settings() -> Settings:

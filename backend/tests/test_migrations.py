@@ -67,9 +67,12 @@ def test_migrations_match_models_and_round_trip(
     assert diff == [], f"Models and migrations disagree: {diff}"
     assert tables == set(Base.metadata.tables)
 
+    # Step back one revision at a time and forward again, so every downgrade() runs.
+    command.downgrade(alembic_config, "-1")
+    command.upgrade(alembic_config, "head")
     command.downgrade(alembic_config, "base")
     _, tables = asyncio.run(_inspect_database(test_database_url))
     assert tables == set()
 
+    # Leave the schema in place for the database tests that run after this one.
     command.upgrade(alembic_config, "head")
-    command.downgrade(alembic_config, "base")
