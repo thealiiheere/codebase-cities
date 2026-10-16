@@ -59,8 +59,11 @@ export class CityView {
     this.renderer.setAnimationLoop((time) => this.frame(time));
   }
 
-  /** Replace whatever is shown with this city, and point the camera at it. */
-  show(city: CityLayout): void {
+  /**
+   * Replace whatever is shown with this city. A new city also points the camera at it; moving
+   * through the timeline passes keepCamera, so the view stays put while the city changes.
+   */
+  show(city: CityLayout, { keepCamera = false } = {}): void {
     this.clear();
     this.ground = new GroundLayer(city);
     this.buildings = new BuildingLayer(city.buildings);
@@ -69,7 +72,9 @@ export class CityView {
 
     const radius = Math.max(city.radius, 40);
     this.dayNight.fitCity(radius, [this.ground, this.buildings, this.bridges]);
-    this.frameCamera(radius);
+    if (!keepCamera) {
+      this.frameCamera(radius);
+    }
   }
 
   /** The building under a point on the screen (in CSS pixels), if any. */

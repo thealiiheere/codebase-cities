@@ -1,19 +1,22 @@
-"""Regenerate frontend/public/demo-city.json: a city built from a made-up profile.
+"""Regenerate the frontend's demo data: a city (and its timeline) from a made-up profile.
 
-The frontend's demo mode (/?demo) loads that file, so the 3D city can be developed and shown
-without a running backend. Run from backend/ whenever the mapping engine changes:
+Writes frontend/public/demo-city.json (today's city) and demo-timeline.json (the city at the
+end of every earlier year). The frontend's demo mode (/?demo) loads them, so the 3D city, the
+music, and the year slider all work without a running backend. Run from backend/ whenever
+the mapping engine changes:
 
     uv run python -m scripts.export_demo_city
 """
 
 import datetime as dt
+import json
 import random
 from pathlib import Path
 
 from app.mapping import RepoData, UserData
 from app.services.city_payload import build_payload
 
-OUTPUT = Path(__file__).resolve().parents[2] / "frontend" / "public" / "demo-city.json"
+PUBLIC = Path(__file__).resolve().parents[2] / "frontend" / "public"
 FETCHED_AT = dt.datetime(2026, 10, 16, 12, 0, tzinfo=dt.UTC)
 
 # (language, number of repos): a polyglot developer, mostly Python and TypeScript.
@@ -48,12 +51,17 @@ def demo_profile() -> UserData:
             active = rng.random() < 0.35
             history_days = rng.randint(0, 80) if active else rng.randint(120, 1500)
             last_push = max(today - dt.timedelta(days=history_days), created)
-            # Spread every commit between creation and the last push, most of them near the
-            # push, so the daily counts add up to the repo's total exactly like real data.
+            # Spread every commit between creation and the last push: most across the repo's
+            # whole life (so the timeline shows buildings growing), some bunched near the last
+            # push. The daily counts add up to the repo's total, exactly like real data.
             span = (last_push - created).days
             daily: dict[dt.date, int] = {}
             for _ in range(commits):
-                day = last_push - dt.timedelta(days=min(int(rng.expovariate(1 / 90)), span))
+                if rng.random() < 0.7:
+                    back = int(rng.random() * span)
+                else:
+                    back = min(int(rng.expovariate(1 / 90)), span)
+                day = last_push - dt.timedelta(days=back)
                 daily[day] = daily.get(day, 0) + 1
             name = f"{(language or 'notes').lower()}-{_project_word(rng)}-{index}"
             repos.append(
@@ -91,14 +99,30 @@ def _project_word(rng: random.Random) -> str:
 
 
 def main() -> None:
-    payload = build_payload(demo_profile(), FETCHED_AT, until=None)
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT.write_text(payload.model_dump_json(), encoding="utf-8")
-    city = payload.city
+    profile = demo_profile()
+    PUBLIC.mkdir(parents=True, exist_ok=True)
+
+    latest = build_payload(profile, FETCHED_AT, until=None)
+    (PUBLIC / "demo-city.json").write_text(latest.model_dump_json(), encoding="utf-8")
+    city = latest.city
     print(
-        f"Wrote {OUTPUT}: {len(city.buildings)} buildings in {len(city.districts)} districts, "
+        f"demo-city.json: {len(city.buildings)} buildings in {len(city.districts)} districts, "
         f"{len(city.bridges)} bridges, {sum(b.floors for b in city.buildings)} floors"
     )
+
+    # Same keys the frontend asks the API for: the last day of each year before this one.
+    years = range(profile.created_at.year, FETCHED_AT.year)
+    timeline = {
+        f"{year}-12-31": build_payload(profile, FETCHED_AT, dt.date(year, 12, 31)).model_dump(
+            mode="json"
+        )
+        for year in years
+    }
+    (PUBLIC / "demo-timeline.json").write_text(
+        json.dumps(timeline, separators=(",", ":")), encoding="utf-8"
+    )
+    counts = ", ".join(f"{date[:4]}: {len(c['city']['buildings'])}" for date, c in timeline.items())
+    print(f"demo-timeline.json: buildings per year - {counts}")
 
 
 if __name__ == "__main__":

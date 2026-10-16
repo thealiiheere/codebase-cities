@@ -26,13 +26,20 @@ interface Voice {
   level: Tone.Volume;
 }
 
+/** One city's playing music: its instruments and the sequence that plays them. */
+interface Band {
+  voices: Voice[];
+  sequence: Tone.Sequence<number>;
+}
+
 export class MusicPlayer {
   private music: MusicParams | null = null;
   // Nothing touches the audio system until the first Play click: browsers only allow sound
   // after the user interacts with the page, and warn about audio created before that.
   private mixer: { input: Tone.Gain; nodes: Tone.ToneAudioNode[]; master: Tone.Volume } | null = null;
-  private sequence: Tone.Sequence<number> | null = null;
-  private voices: Voice[] = [];
+  private band: Band | null = null;
+  // Bands that were replaced mid-song and are finishing their last notes.
+  private retiring: Band[] = [];
   private volume = 0.7;
 
   get hasMusic(): boolean {
@@ -43,15 +50,19 @@ export class MusicPlayer {
     return this.mixer !== null && Tone.getTransport().state === "started";
   }
 
-  /** Switch to new music. If music is already playing, the new music keeps playing. */
+  /**
+   * Switch to new music. While playing, the switch happens on the next bar line, so moving
+   * through the timeline changes the music without a stutter.
+   */
   load(music: MusicParams): void {
     this.music = music;
-    if (this.mixer !== null) {
-      const wasPlaying = this.isPlaying;
+    if (this.mixer === null) {
+      return;
+    }
+    if (this.isPlaying) {
+      this.swapAtNextBar(music);
+    } else {
       this.rebuild();
-      if (wasPlaying && this.hasMusic) {
-        Tone.getTransport().start();
-      }
     }
   }
 
@@ -84,7 +95,7 @@ export class MusicPlayer {
   }
 
   dispose(): void {
-    this.clearVoices();
+    this.clearBands();
     if (this.mixer !== null) {
       for (const node of this.mixer.nodes) node.dispose();
       this.mixer = null;
@@ -104,34 +115,67 @@ export class MusicPlayer {
     return { input, master, nodes: [input, reverb, limiter, master] };
   }
 
-  /** Throw away the current tracks and set up the ones in `this.music`. */
+  /** Stop, throw away all tracks, and set up `this.music` from the beginning. */
   private rebuild(): void {
     const transport = Tone.getTransport();
     transport.stop();
+    transport.cancel(0); // Drop any switch still waiting for its bar line.
     transport.position = 0;
-    this.clearVoices();
+    this.clearBands();
     if (this.mixer === null || this.music === null) {
       return;
     }
-    const music = this.music;
-    transport.bpm.value = music.tempo_bpm;
-    // Swing delays every other sixteenth note a little: steady players sound straight and
-    // even, bursty ones loose and groovy. It comes from the data, so it's always the same.
-    transport.swing = music.tempo_variation * MAX_SWING;
+    this.applyFeel(this.music);
     transport.swingSubdivision = "16n";
+    this.band = this.createBand(this.music, 0);
+  }
 
-    const input = this.mixer.input;
-    this.voices = music.tracks.map((track) => {
+  /** Bring in `music` exactly at the next bar line, letting the current band finish its bar. */
+  private swapAtNextBar(music: MusicParams): void {
+    const transport = Tone.getTransport();
+    // The transport counts time in "ticks" (PPQ per beat); a bar is 4 beats.
+    const ticksPerBar = transport.PPQ * 4;
+    const nextBar = `${(Math.floor(transport.ticks / ticksPerBar) + 1) * ticksPerBar}i`;
+
+    const outgoing = this.band;
+    if (outgoing !== null) {
+      outgoing.sequence.stop(nextBar);
+      this.retiring.push(outgoing);
+    }
+    this.band = this.createBand(music, nextBar);
+    transport.scheduleOnce((time) => {
+      this.applyFeel(music, time);
+      // One bar later the old instruments have finished ringing; free them.
+      transport.scheduleOnce(() => {
+        if (outgoing !== null) this.retire(outgoing);
+      }, "+1m");
+    }, nextBar);
+  }
+
+  /** Tempo and swing. Swing delays every other sixteenth a little: steady committers sound
+   * straight and even, bursty ones loose. It comes from the data, so it's always the same. */
+  private applyFeel(music: MusicParams, time?: number): void {
+    const transport = Tone.getTransport();
+    if (time === undefined) {
+      transport.bpm.value = music.tempo_bpm;
+    } else {
+      transport.bpm.setValueAtTime(music.tempo_bpm, time);
+    }
+    transport.swing = music.tempo_variation * MAX_SWING;
+  }
+
+  /** Instruments for every track, plus a looping sequence starting at `start`. */
+  private createBand(music: MusicParams, start: Tone.Unit.Time): Band {
+    const input = this.mixer!.input;
+    const voices = music.tracks.map((track) => {
       const instrument = createInstrument(track.instrument);
       // The backend's volume is a 0..1 gain; Tone's Volume node works in decibels.
       const level = new Tone.Volume(Tone.gainToDb(track.volume)).connect(input);
       instrument.output.connect(level);
       return { track, instrument, level };
     });
-
     const steps = Array.from({ length: music.bars * music.steps_per_bar }, (_, step) => step);
-    const voices = this.voices;
-    this.sequence = new Tone.Sequence(
+    const sequence = new Tone.Sequence(
       (time, step) => {
         for (const voice of voices) {
           const notes = voice.track.steps[step];
@@ -142,17 +186,24 @@ export class MusicPlayer {
       },
       steps,
       "16n",
-    ).start(0);
+    ).start(start);
+    return { voices, sequence };
   }
 
-  private clearVoices(): void {
-    this.sequence?.dispose();
-    this.sequence = null;
-    for (const voice of this.voices) {
+  private retire(band: Band): void {
+    this.retiring = this.retiring.filter((other) => other !== band);
+    band.sequence.dispose();
+    for (const voice of band.voices) {
       voice.instrument.dispose();
       voice.level.dispose();
     }
-    this.voices = [];
+  }
+
+  private clearBands(): void {
+    for (const band of [...this.retiring, ...(this.band ? [this.band] : [])]) {
+      this.retire(band);
+    }
+    this.band = null;
   }
 
   private applyVolume(master: Tone.Volume): void {

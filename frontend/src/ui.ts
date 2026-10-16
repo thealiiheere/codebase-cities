@@ -1,6 +1,7 @@
 // The page's HTML controls (defined in index.html): finding them and updating them.
 
-import type { Building, Job, MusicParams } from "./api";
+import type { Building, MusicParams } from "./api";
+import type { TimelineElements } from "./timeline";
 
 export interface Ui {
   form: HTMLFormElement;
@@ -11,7 +12,10 @@ export interface Ui {
   volume: HTMLInputElement;
   dayNight: HTMLButtonElement;
   viewport: HTMLElement;
+  overlay: HTMLElement;
+  timeline: TimelineElements;
   cityInfo: HTMLElement;
+  share: HTMLButtonElement;
   nowPlaying: HTMLElement;
   tooltip: HTMLElement;
 }
@@ -34,10 +38,30 @@ export function getUi(): Ui {
     volume: find("#volume"),
     dayNight: find("#daynight"),
     viewport: find("#viewport"),
+    overlay: find("#overlay"),
+    timeline: {
+      container: find("#timeline"),
+      slider: find("#timeline-slider"),
+      play: find("#timeline-play"),
+      start: find("#timeline-start"),
+      year: find("#timeline-year"),
+      spinner: find("#timeline-spinner"),
+    },
     cityInfo: find("#city-info"),
+    share: find("#share"),
     nowPlaying: find("#now-playing"),
     tooltip: find("#tooltip"),
   };
+}
+
+/** Show a status message for a few seconds, then clear it (unless something replaced it). */
+export function flashStatus(ui: Ui, text: string, milliseconds = 2500): void {
+  setStatus(ui, text);
+  window.setTimeout(() => {
+    if (ui.status.textContent === text) {
+      setStatus(ui, "");
+    }
+  }, milliseconds);
 }
 
 /** The play button names what it will do. */
@@ -62,22 +86,6 @@ export function setStatus(ui: Ui, text: string, isError = false): void {
 export function setBusy(ui: Ui, busy: boolean): void {
   ui.submit.disabled = busy;
   ui.username.disabled = busy;
-}
-
-/** A friendly line for each stage of a backend job. */
-export function describeJob(job: Job): string {
-  switch (job.status) {
-    case "queued":
-      return `Waiting for a free worker to build ${job.username}'s city…`;
-    case "fetching":
-      return `Fetching ${job.username}'s repositories from GitHub…`;
-    case "building":
-      return "Laying out the streets…";
-    case "done":
-      return "Done!";
-    case "failed":
-      return job.error ?? "Building this city failed.";
-  }
 }
 
 /** The day/night button names what it will switch to. */

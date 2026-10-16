@@ -7,7 +7,7 @@ south, and heights go up (Three.js's y axis).
 import datetime as dt
 import math
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict
@@ -107,20 +107,30 @@ class CityLayout(_Frozen):
     radius: float
 
 
-def build_city(user: UserData, *, as_of: dt.date) -> CityLayout:
-    """Lay out the city. Pure: the same user and as_of always give an identical layout."""
-    groups = _district_groups(user.repos)
+def build_city(user: UserData, *, as_of: dt.date, layout: UserData | None = None) -> CityLayout:
+    """Lay out the city. Pure: the same inputs always give an identical layout.
+
+    `layout` is the data the streets and plots are planned from; it defaults to `user`. The
+    timeline passes the latest data here, so every repo keeps the plot it has in today's city
+    and buildings never move as you scrub through the years: a repo that doesn't exist yet
+    leaves its plot empty, and a district appears once its first building does.
+    """
+    plan = layout or user
+    groups = _district_groups(plan.repos)
     grids = [_DistrictGrid.for_repos(language, repos) for language, repos in groups]
     plaza = Rect.centered(0, 0, PLAZA_SIZE, PLAZA_SIZE)
     rects = place_around(
         [(grid.width, grid.depth) for grid in grids], center=plaza, gap=AVENUE_WIDTH
     )
 
+    present = {repo.github_id: repo for repo in user.repos}
     districts: list[District] = []
     buildings: list[Building] = []
     for grid, rect in zip(grids, rects, strict=True):
-        districts.append(grid.district(rect))
-        buildings.extend(grid.buildings(rect, user.login, as_of))
+        built = grid.buildings(rect, present, user.login, as_of)
+        if built:
+            districts.append(grid.district(rect, len(built)))
+            buildings.extend(built)
 
     return CityLayout(
         version=MAPPING_VERSION,
@@ -178,7 +188,7 @@ class _DistrictGrid:
             language, repos, lots[: len(repos)], span_x + 2 * SIDEWALK, span_z + 2 * SIDEWALK
         )
 
-    def district(self, rect: Rect) -> District:
+    def district(self, rect: Rect, repo_count: int) -> District:
         x, z = rect.center
         return District(
             language=self.language,
@@ -187,15 +197,22 @@ class _DistrictGrid:
             z=rounded(z),
             width=rounded(rect.width),
             depth=rounded(rect.depth),
-            repo_count=len(self.repos),
+            repo_count=repo_count,
         )
 
-    def buildings(self, rect: Rect, username: str, as_of: dt.date) -> list[Building]:
+    def buildings(
+        self, rect: Rect, present: Mapping[int, RepoData], username: str, as_of: dt.date
+    ) -> list[Building]:
+        """A building on each lot whose repo is in `present` (by GitHub id), drawn from that
+        repo's data; lots of repos that don't exist (yet) stay empty."""
         center_x, center_z = rect.center
-        return [
-            _building(repo, self.language, center_x + lot_x, center_z + lot_z, username, as_of)
-            for repo, (lot_x, lot_z) in zip(self.repos, self.lots, strict=True)
-        ]
+        buildings = []
+        for planned, (lot_x, lot_z) in zip(self.repos, self.lots, strict=True):
+            repo = present.get(planned.github_id)
+            if repo is not None:
+                x, z = center_x + lot_x, center_z + lot_z
+                buildings.append(_building(repo, self.language, x, z, username, as_of))
+        return buildings
 
 
 def _span(count: int, lot: float) -> float:

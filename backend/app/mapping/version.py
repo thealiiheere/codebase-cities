@@ -5,4 +5,4 @@ it in cache keys, so a bump makes every cached city rebuild instead of serving s
 The golden test in tests/test_mapping_determinism.py fails until you bump it.
 """
 
-MAPPING_VERSION = 2  # 2: buildings are made of whole floors.
+MAPPING_VERSION = 3  # 3: past cities keep the latest layout (2: whole floors).

@@ -231,3 +231,189 @@ button:disabled {
     width: 140px;
   }
 }
+
+/* --- Share link --- */
+
+.info-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.link-button:hover:not(:disabled) {
+  background: none;
+  text-decoration: underline;
+}
+
+/* --- Timeline --- */
+
+.timeline {
+  position: fixed;
+  left: 50%;
+  bottom: 72px;
+  z-index: 10;
+  transform: translateX(-50%);
+  width: min(560px, calc(100vw - 32px));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+}
+
+.timeline[hidden] {
+  display: none;
+}
+
+#timeline-play {
+  width: 34px;
+  padding: 4px 0;
+}
+
+#timeline-slider {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.year-edge {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.year {
+  min-width: 3em;
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Loading spinner --- */
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.spinner[hidden] {
+  display: none;
+}
+
+.spinner.large {
+  display: block;
+  width: 32px;
+  height: 32px;
+  border-width: 3px;
+  margin: 0 auto 14px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* --- Center card: welcome, progress, errors --- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  pointer-events: none; /* Only the card itself takes clicks; the city stays draggable. */
+}
+
+.overlay[hidden] {
+  display: none;
+}
+
+.card {
+  pointer-events: auto;
+  max-width: 420px;
+  padding: 24px 28px;
+  border-radius: 14px;
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(10px);
+}
+
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.card p {
+  margin: 8px 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.card a {
+  color: var(--accent);
+}
+
+.card button {
+  margin-top: 12px;
+}
+
+.error-text {
+  color: var(--error) !important;
+}
+
+.steps {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+  font-size: 14px;
+  line-height: 2;
+}
+
+.steps li::before {
+  display: inline-block;
+  width: 1.5em;
+  content: "○";
+}
+
+.steps li.todo {
+  color: var(--muted);
+}
+
+.steps li.active {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.steps li.active::before {
+  content: "◉";
+  color: var(--accent);
+}
+
+.steps li.done {
+  color: var(--muted);
+}
+
+.steps li.done::before {
+  content: "✓";
+  color: #3fb950;
+}

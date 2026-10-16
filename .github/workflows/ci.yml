@@ -86,3 +86,39 @@ jobs:
       # Type-checks with tsc (strict), then builds the production bundle.
       - name: Type check and build
         run: npm run build
+
+  # Builds the production images and smoke-tests the whole stack through nginx, the same way
+  # a deployment runs it: migrations, API, worker, Postgres, Redis, and the static site.
+  production-stack:
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_PASSWORD: ci-only-password
+      WEB_PORT: "8080"
+    steps:
+      - uses: actions/checkout@v5
+
+      # docker-compose.prod.yml reads .env; CI needs no real secrets for a smoke test.
+      - name: Create an empty .env
+        run: touch .env
+
+      - name: Build and start the production stack
+        run: docker compose -f docker-compose.prod.yml up -d --build
+
+      - name: Smoke test through nginx
+        run: |
+          for attempt in $(seq 1 60); do
+            curl -fsS http://localhost:8080/api/health && break
+            sleep 2
+          done
+          curl -fsS http://localhost:8080/api/health | grep -q '"status":"ok"'
+          # The site itself, a share link (served by the single-page-app fallback), and the
+          # demo data.
+          curl -fsS http://localhost:8080/ | grep -q "<title>Codebase Cities</title>"
+          curl -fsS http://localhost:8080/city/octocat | grep -q "<title>Codebase Cities</title>"
+          curl -fsS -o /dev/null http://localhost:8080/demo-city.json
+          # The API's error shape comes through the proxy intact.
+          curl -sS http://localhost:8080/api/cities/octocat | grep -q '"code":"city_not_found"'
+
+      - name: Show logs if anything failed
+        if: failure()
+        run: docker compose -f docker-compose.prod.yml logs --no-color

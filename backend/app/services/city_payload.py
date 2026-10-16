@@ -39,7 +39,11 @@ def cache_key(username: str, fetched_at: dt.datetime, until: dt.date | None) -> 
 
 
 def build_payload(data: UserData, fetched_at: dt.datetime, until: dt.date | None) -> CityResponse:
-    """Run the mapping engine for the latest city, or for the city as it was on `until`."""
+    """Run the mapping engine for the latest city, or for the city as it was on `until`.
+
+    A past city is drawn on the latest city's plots (`layout=data`), so buildings stay put
+    while the timeline moves and the city visibly grows in place.
+    """
     as_of = until or fetched_at.date()
     view = snapshot_at(data, until) if until else data
     return CityResponse(
@@ -48,7 +52,7 @@ def build_payload(data: UserData, fetched_at: dt.datetime, until: dt.date | None
         as_of=as_of,
         until=until,
         timeline=Timeline(start=data.created_at.date(), end=fetched_at.date()),
-        city=build_city(view, as_of=as_of),
+        city=build_city(view, as_of=as_of, layout=data),
         music=build_music(view, as_of=as_of),
     )
 

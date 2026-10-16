@@ -43,7 +43,7 @@ export class BridgeLayer implements NightAware {
     const curve = new THREE.QuadraticBezierCurve3(start, control, end);
 
     // Kept thin: in a small city the camera is close, and fat tubes would hide the buildings.
-    const thickness = 0.12 + strength * 0.38;
+    const thickness = 0.1 + strength * 0.25;
     const geometry = new THREE.TubeGeometry(curve, 64, thickness, 8, false);
     this.geometries.push(geometry);
     this.group.add(new THREE.Mesh(geometry, this.material));

@@ -34,8 +34,23 @@
     <!-- The 3D canvas (and the district labels on top of it) go in here. -->
     <main id="viewport"></main>
 
+    <!-- Welcome, building progress, and errors (see src/overlay.ts). -->
+    <section id="overlay" class="overlay" hidden></section>
+
+    <!-- The year slider (see src/timeline.ts). -->
+    <div id="timeline" class="timeline" hidden>
+      <button id="timeline-play" type="button" title="Fly through the years">▶</button>
+      <span id="timeline-start" class="year-edge"></span>
+      <input id="timeline-slider" type="range" step="1" aria-label="Year to show" />
+      <span id="timeline-year" class="year">Now</span>
+      <span id="timeline-spinner" class="spinner" hidden></span>
+    </div>
+
     <div id="info">
-      <div id="city-info"></div>
+      <div class="info-row">
+        <span id="city-info"></span>
+        <button id="share" type="button" class="link-button" hidden>🔗 Copy link</button>
+      </div>
       <div id="now-playing"></div>
     </div>
     <div id="tooltip" hidden></div>
