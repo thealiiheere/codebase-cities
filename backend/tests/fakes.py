@@ -1,4 +1,5 @@
-"""In-memory stand-ins for the GitHub client and the job queue, plus data builders."""
+"""In-memory stand-ins for the GitHub client, job queue, city cache, and rate limiter, plus data
+builders."""
 
 import datetime as dt
 import uuid
@@ -6,6 +7,7 @@ from collections.abc import Awaitable, Callable
 
 from app.github.errors import GitHubUserNotFoundError
 from app.github.models import CommitHistory, ContributionDay, RepoInfo, UserProfile
+from app.limiter import RateLimitDecision
 
 T0 = dt.datetime(2026, 10, 16, 12, 0, tzinfo=dt.UTC)
 
@@ -125,3 +127,27 @@ class FakeCityCache:
         if self.error:
             raise self.error
         self.entries[key] = value
+
+
+class FakeRateLimiter:
+    """Allows the first `limit` requests (every request if None), then refuses the rest. Records
+    which client made each request. `error` makes every call fail."""
+
+    def __init__(
+        self,
+        limit: int | None = None,
+        retry_after_seconds: int = 600,
+        error: Exception | None = None,
+    ) -> None:
+        self.limit = limit
+        self.retry_after_seconds = retry_after_seconds
+        self.error = error
+        self.hits: list[str] = []
+
+    async def hit(self, client_ip: str) -> RateLimitDecision:
+        self.hits.append(client_ip)
+        if self.error:
+            raise self.error
+        if self.limit is None or len(self.hits) <= self.limit:
+            return RateLimitDecision(allowed=True)
+        return RateLimitDecision(allowed=False, retry_after_seconds=self.retry_after_seconds)

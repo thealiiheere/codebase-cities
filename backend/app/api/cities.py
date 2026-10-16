@@ -3,7 +3,15 @@ from typing import Annotated
 
 from fastapi import APIRouter, Path, Query, Response, status
 
-from app.api.deps import CityCacheDep, GitHubDep, QueueDep, SessionDep, SettingsDep
+from app.api.deps import (
+    CityCacheDep,
+    ClientIpDep,
+    GitHubDep,
+    QueueDep,
+    RateLimiterDep,
+    SessionDep,
+    SettingsDep,
+)
 from app.schemas.cities import CityResponse
 from app.schemas.errors import ErrorResponse
 from app.schemas.jobs import JobResponse
@@ -34,6 +42,7 @@ def _json(body: str, status_code: int = status.HTTP_200_OK) -> Response:
         200: {"model": CityResponse, "description": "Data is fresh: here is the city"},
         202: {"model": JobResponse, "description": "A job is queued or running; poll it"},
         404: {"model": ErrorResponse, "description": "No such GitHub user"},
+        429: {"model": ErrorResponse, "description": "Too many new cities from this client"},
         503: {"model": ErrorResponse, "description": "GitHub rate limited or unavailable"},
     },
 )
@@ -45,8 +54,18 @@ async def create_city(
     queue: QueueDep,
     cache: CityCacheDep,
     settings: SettingsDep,
+    limiter: RateLimiterDep,
+    client_ip: ClientIpDep,
 ) -> Response | JobResponse:
-    result = await request_city(session, username, github=github, queue=queue, settings=settings)
+    result = await request_city(
+        session,
+        username,
+        github=github,
+        queue=queue,
+        settings=settings,
+        limiter=limiter,
+        client_ip=client_ip,
+    )
     if isinstance(result, CityReady):
         return _json(await get_city_json(session, cache, result.username))
     response.headers["Location"] = f"/api/jobs/{result.job.id}"

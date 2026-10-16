@@ -14,6 +14,7 @@ from app.config import Settings, get_settings
 from app.db import create_engine, create_session_factory
 from app.errors import register_error_handlers
 from app.github.client import create_github_client
+from app.limiter import create_rate_limiter
 from app.queue import create_job_queue
 
 
@@ -35,6 +36,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.session_factory = create_session_factory(engine)
         app.state.redis = redis
         app.state.city_cache = create_city_cache(redis, resolved)
+        app.state.rate_limiter = create_rate_limiter(redis, resolved)
         app.state.queue = queue
         app.state.github = github
         try:

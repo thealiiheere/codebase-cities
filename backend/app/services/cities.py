@@ -2,14 +2,16 @@
 
 import datetime as dt
 import logging
+import math
 from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.errors import GitHubUnavailableError, QueueUnavailableError
+from app.errors import GitHubUnavailableError, QueueUnavailableError, RateLimitedError
 from app.ingestion.fetch import GitHubSource
+from app.limiter import RateLimiter
 from app.models import GithubUser, Job
 from app.queue import JobQueue
 from app.services import jobs
@@ -41,6 +43,8 @@ async def request_city(
     github: GitHubSource | None,
     queue: JobQueue,
     settings: Settings,
+    limiter: RateLimiter | None,
+    client_ip: str,
     now: dt.datetime | None = None,
 ) -> CityReady | CityQueued:
     now = now or dt.datetime.now(dt.UTC)
@@ -62,6 +66,9 @@ async def request_city(
     # of a job that fails later. Repeat lookups are free thanks to ETags.
     if github is None:
         raise GitHubUnavailableError("This server has no GitHub token configured.")
+    # Everything from here on spends GitHub quota (the lookup, then the ingestion job), so it
+    # counts against the client's limit. Fresh cities and running jobs above never do.
+    await check_rate_limit(limiter, client_ip)
     with github_errors_as_app_errors(now):
         await github.lookup_user(username)
 
@@ -69,6 +76,31 @@ async def request_city(
     if created:
         await _enqueue(session, queue, job, now)
     return CityQueued(job=job)
+
+
+async def check_rate_limit(limiter: RateLimiter | None, client_ip: str) -> None:
+    """Raise RateLimitedError if this client has asked GitHub for too much lately."""
+    if limiter is None:
+        return
+    try:
+        decision = await limiter.hit(client_ip)
+    except Exception:
+        # Fail open: a Redis outage shouldn't stop people getting cities. The GitHub client's
+        # own rate limit handling still keeps the token from being run dry in the meantime.
+        logger.warning("Rate limiter unavailable; allowing the request", exc_info=True)
+        return
+    if not decision.allowed:
+        seconds = decision.retry_after_seconds
+        raise RateLimitedError(
+            "Too many new cities requested from your address. "
+            f"Please try again in {_minutes(seconds)}.",
+            headers={"Retry-After": str(seconds)},
+        )
+
+
+def _minutes(seconds: int) -> str:
+    minutes = max(math.ceil(seconds / 60), 1)
+    return "1 minute" if minutes == 1 else f"{minutes} minutes"
 
 
 async def _enqueue(session: AsyncSession, queue: JobQueue, job: Job, now: dt.datetime) -> None:

@@ -57,13 +57,17 @@ services:
 
   api:
     <<: *backend
-    # --proxy-headers: trust nginx's X-Forwarded-* headers for the real client address.
+    # --proxy-headers: take the client address from nginx's X-Forwarded-For, which the rate
+    # limit counts by. Only proxies on private networks (nginx, or a TLS proxy in front of it)
+    # are trusted, so uvicorn uses the last address none of them added. Trusting "*" instead
+    # would make it use the first one, which the visitor can write themselves to dodge the limit.
     command:
       [
         "uvicorn", "app.main:create_app", "--factory",
         "--host", "0.0.0.0", "--port", "8000",
         "--workers", "2",
-        "--proxy-headers", "--forwarded-allow-ips", "*",
+        "--proxy-headers",
+        "--forwarded-allow-ips", "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
       ]
     depends_on:
       migrate:

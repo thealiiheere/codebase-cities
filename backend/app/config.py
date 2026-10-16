@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # time and mapping version), so this only bounds memory.
     city_cache_ttl_hours: float = Field(default=24, gt=0)
 
+    # Requests per client IP, per window, that may reach GitHub (city requests that aren't served
+    # from fresh data or an already running job). 0 turns the limit off.
+    rate_limit_new_cities: int = Field(default=10, ge=0)
+    rate_limit_window_seconds: int = Field(default=3600, ge=1)
+
     # Jobs per worker process. Kept low: GitHub's secondary limits punish bursts of parallel calls.
     worker_max_jobs: int = Field(default=2, ge=1)
     # ARQ cancels a job that runs longer than this.

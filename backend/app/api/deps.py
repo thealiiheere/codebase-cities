@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.cache import CityCache
 from app.config import Settings
 from app.ingestion.fetch import GitHubSource
+from app.limiter import RateLimiter
 from app.queue import JobQueue
 
 
@@ -40,9 +41,22 @@ def get_city_cache(request: Request) -> CityCache:
     return cast(CityCache, request.app.state.city_cache)
 
 
+def get_rate_limiter(request: Request) -> RateLimiter | None:
+    # None when the limit is turned off (RATE_LIMIT_NEW_CITIES=0).
+    return cast(RateLimiter | None, request.app.state.rate_limiter)
+
+
+def get_client_ip(request: Request) -> str:
+    # Behind nginx this is the visitor's address, not nginx's: uvicorn's --proxy-headers takes
+    # it from X-Forwarded-For, trusting only the proxies listed in docker-compose.prod.yml.
+    return request.client.host if request.client else "unknown"
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 RedisDep = Annotated[Redis, Depends(get_redis)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 GitHubDep = Annotated[GitHubSource | None, Depends(get_github)]
 QueueDep = Annotated[JobQueue, Depends(get_queue)]
 CityCacheDep = Annotated[CityCache, Depends(get_city_cache)]
+RateLimiterDep = Annotated[RateLimiter | None, Depends(get_rate_limiter)]
+ClientIpDep = Annotated[str, Depends(get_client_ip)]

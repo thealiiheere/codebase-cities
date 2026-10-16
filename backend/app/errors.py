@@ -34,6 +34,13 @@ class ServiceUnavailableError(AppError):
     code = "service_unavailable"
 
 
+class RateLimitedError(AppError):
+    """This client sent too many requests that cost GitHub quota (not GitHub limiting us)."""
+
+    status_code = 429
+    code = "rate_limited"
+
+
 class UnknownGitHubUserError(NotFoundError):
     code = "github_user_not_found"
 

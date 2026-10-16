@@ -189,13 +189,20 @@ If a Postgres already runs on your machine's port 5432, set `POSTGRES_HOST_PORT=
 
 | Request | Result |
 | --- | --- |
-| `POST /api/cities/{username}` | `200` + the city when stored data is fresh; `202` + a job (and `Location` header) when it must be fetched; `404` for unknown users; `503` when GitHub is rate limited (with `Retry-After`) |
+| `POST /api/cities/{username}` | `200` + the city when stored data is fresh; `202` + a job (and `Location` header) when it must be fetched; `404` for unknown users; `429` (code `rate_limited`, with `Retry-After`) when this client has asked for too many new cities; `503` when GitHub is rate limited (with `Retry-After`) |
 | `GET /api/cities/{username}?until=YYYY-MM-DD` | The city layout and music, optionally as of the end of a past day; `404` until the city has been built once |
 | `GET /api/jobs/{job_id}` | The job: `queued`, `fetching`, `building`, `done`, or `failed` (with a readable `error`) |
 | `GET /api/health` | `200` when Postgres and Redis respond, else `503` |
 
 Errors always look like `{"error": {"code": "...", "message": "..."}}`. Interactive docs are
 at `/docs` on the API.
+
+**Rate limit.** By default each client IP (each /64 network for IPv6) may make 10 city requests
+an hour that reach GitHub: new cities, refreshes of outdated ones, and lookups of unknown users.
+Serving a fresh city, joining a job that is already running, polling a job, and reading a city
+(including the timeline) are never counted. Counts live in Redis, so they hold across API
+processes; if Redis is down, requests are let through and a warning is logged. Set
+`RATE_LIMIT_NEW_CITIES` and `RATE_LIMIT_WINDOW_SECONDS` in `.env` (0 turns the limit off).
 
 ## Deployment
 
@@ -225,6 +232,11 @@ CI builds this exact stack and smoke-tests it through nginx on every push.
   timeline keeps today's values for those and only replays repos and commits. Commit history is
   capped per repo (newest 5,000 by default); older totals are exact, their dates are not.
 - **Public data only.** Private repos never appear, even when the token can see them.
-- **No rate limiting of this API.** Anyone who can reach it can trigger GitHub fetches, which
-  spend your token's quota. Put the site behind a rate-limiting proxy before sharing it widely.
+- **The rate limit is per IP address.** It stops one visitor from spending your token's quota,
+  but not many addresses working together, and visitors who share an address (an office
+  network, say) share one limit. It's a fixed window, so a client can fit up to twice the
+  limit around the moment one window ends and the next begins. The API finds the visitor's
+  address in `X-Forwarded-For`, trusting only proxies on private networks (see
+  `docker-compose.prod.yml`). Behind a proxy on a public address, such as a CDN, add its
+  ranges there, or every visitor will count as that proxy.
 - **Bundle size.** Three.js and Tone.js make the frontend about 220 KB gzipped.

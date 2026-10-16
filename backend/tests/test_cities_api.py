@@ -1,10 +1,12 @@
 """The city and job endpoints, against a real database.
 
-GitHub, the job queue, and the city cache are replaced with in-memory fakes through FastAPI's
-dependency overrides, so these tests exercise routing, validation, services, and SQL together.
+GitHub, the job queue, the city cache, and the rate limiter are replaced with in-memory fakes
+through FastAPI's dependency overrides, so these tests exercise routing, validation, services,
+and SQL together.
 """
 
 import datetime as dt
+import logging
 import uuid
 from collections.abc import AsyncIterator
 
@@ -14,11 +16,18 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api.deps import get_city_cache, get_github, get_queue, get_session
+from app.api.deps import get_city_cache, get_github, get_queue, get_rate_limiter, get_session
 from app.github.errors import RateLimitExceededError
 from app.models import GithubUser, Job, JobStatus
 from app.services.ingestion import run_ingestion_job
-from tests.fakes import FakeCityCache, FakeGitHub, FakeQueue, make_profile, make_repo
+from tests.fakes import (
+    FakeCityCache,
+    FakeGitHub,
+    FakeQueue,
+    FakeRateLimiter,
+    make_profile,
+    make_repo,
+)
 
 
 def utcnow() -> dt.datetime:
@@ -41,12 +50,18 @@ def fake_cache() -> FakeCityCache:
 
 
 @pytest.fixture
+def fake_limiter() -> FakeRateLimiter:
+    return FakeRateLimiter()  # Allows everything unless a test sets a limit.
+
+
+@pytest.fixture
 def api(
     app: FastAPI,
     session_factory: async_sessionmaker[AsyncSession],
     fake_github: FakeGitHub,
     fake_queue: FakeQueue,
     fake_cache: FakeCityCache,
+    fake_limiter: FakeRateLimiter,
 ) -> FastAPI:
     async def real_session() -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
@@ -56,6 +71,7 @@ def api(
     app.dependency_overrides[get_github] = lambda: fake_github
     app.dependency_overrides[get_queue] = lambda: fake_queue
     app.dependency_overrides[get_city_cache] = lambda: fake_cache
+    app.dependency_overrides[get_rate_limiter] = lambda: fake_limiter
     return app
 
 
@@ -143,13 +159,16 @@ async def test_rate_limit_is_503_with_retry_after(
 
 
 @pytest.mark.integration
-async def test_missing_github_token_is_503(api: FastAPI, client: httpx.AsyncClient) -> None:
+async def test_missing_github_token_is_503(
+    api: FastAPI, client: httpx.AsyncClient, fake_limiter: FakeRateLimiter
+) -> None:
     api.dependency_overrides[get_github] = lambda: None
 
     response = await client.post("/api/cities/octocat")
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "github_unavailable"
+    assert fake_limiter.hits == []  # Nothing reached GitHub, so nothing counted.
 
 
 @pytest.mark.integration
@@ -219,6 +238,83 @@ async def test_stale_job_is_replaced(
     assert response.json()["id"] != str(stuck.id)
     await session.refresh(stuck)
     assert stuck.status == JobStatus.FAILED
+
+
+# --- Rate limiting -----------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_requests_past_the_limit_are_429_with_retry_after(
+    api: FastAPI,
+    client: httpx.AsyncClient,
+    fake_github: FakeGitHub,
+    fake_limiter: FakeRateLimiter,
+    fake_queue: FakeQueue,
+    session: AsyncSession,
+) -> None:
+    fake_limiter.limit = 1
+    fake_limiter.retry_after_seconds = 541
+
+    unknown = await client.post("/api/cities/ghost")  # Lookups of unknown users count too.
+    limited = await client.post("/api/cities/octocat")
+
+    assert unknown.status_code == 404
+    assert limited.status_code == 429
+    assert limited.headers["retry-after"] == "541"
+    assert limited.json() == {
+        "error": {
+            "code": "rate_limited",
+            "message": "Too many new cities requested from your address. "
+            "Please try again in 10 minutes.",
+        }
+    }
+    # Counted by the address the request came from (httpx's in-process client is 127.0.0.1).
+    assert fake_limiter.hits == ["127.0.0.1", "127.0.0.1"]
+    assert fake_github.calls == ["lookup_user"]  # Only for ghost; octocat never reached GitHub.
+    assert fake_queue.enqueued == []
+    assert await jobs_in_db(session) == []
+
+
+@pytest.mark.integration
+async def test_fresh_cities_and_running_jobs_are_never_limited(
+    api: FastAPI,
+    client: httpx.AsyncClient,
+    fake_limiter: FakeRateLimiter,
+    session: AsyncSession,
+) -> None:
+    fake_limiter.limit = 0  # Refuse anything that asks.
+    session.add(user_row(utcnow() - dt.timedelta(hours=1)))
+    running = Job(username="hubot", status=JobStatus.FETCHING, created_at=utcnow())
+    session.add(running)
+    await session.commit()
+
+    fresh = await client.post("/api/cities/octocat")
+    reused = await client.post("/api/cities/hubot")
+    read = await client.get("/api/cities/octocat")
+    polled = await client.get(f"/api/jobs/{running.id}")
+
+    assert (fresh.status_code, reused.status_code, read.status_code) == (200, 202, 200)
+    assert reused.json()["id"] == str(running.id)
+    assert polled.status_code == 200
+    assert fake_limiter.hits == []
+
+
+@pytest.mark.integration
+async def test_a_broken_rate_limiter_lets_requests_through(
+    api: FastAPI,
+    client: httpx.AsyncClient,
+    fake_limiter: FakeRateLimiter,
+    fake_queue: FakeQueue,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake_limiter.error = ConnectionError("redis down")
+
+    with caplog.at_level(logging.WARNING, logger="app.services.cities"):
+        response = await client.post("/api/cities/octocat")
+
+    assert response.status_code == 202
+    assert len(fake_queue.enqueued) == 1
+    assert "Rate limiter unavailable" in caplog.text
 
 
 def user_row(fetched_at: dt.datetime) -> GithubUser:
@@ -392,6 +488,7 @@ def offline_api(app: FastAPI) -> FastAPI:
     app.dependency_overrides[get_github] = lambda: None
     app.dependency_overrides[get_queue] = lambda: FakeQueue()
     app.dependency_overrides[get_city_cache] = lambda: FakeCityCache()
+    app.dependency_overrides[get_rate_limiter] = lambda: None
     return app
 
 
