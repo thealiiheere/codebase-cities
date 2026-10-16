@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The `.env` file lives at the repository root, shared with docker-compose. Resolving it from this
@@ -20,6 +20,16 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://cities:cities@localhost:5432/cities"
     redis_url: str = "redis://localhost:6379/0"
+
+    @field_validator("database_url")
+    @classmethod
+    def use_async_driver(cls, url: str) -> str:
+        """Hosting platforms such as Render hand out `postgres://` or `postgresql://` URLs, but
+        SQLAlchemy's async engine needs the asyncpg driver named in the scheme."""
+        for scheme in ("postgres://", "postgresql://"):
+            if url.startswith(scheme):
+                return "postgresql+asyncpg://" + url.removeprefix(scheme)
+        return url
 
     # Optional so the API can boot (e.g. for health checks) without it; the GitHub client
     # refuses to make requests when it is missing.

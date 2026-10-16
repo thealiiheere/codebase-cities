@@ -226,6 +226,33 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 CI builds this exact stack and smoke-tests it through nginx on every push.
 
+### On Render
+
+[`render.yaml`](render.yaml) is a Render Blueprint that creates everything from this repo:
+
+| Service | Render type | Plan in the Blueprint |
+| --- | --- | --- |
+| `codebase-cities` (the website) | Static Site | free |
+| `codebase-cities-api` | Web Service (Docker) | free (sleeps when idle) |
+| `codebase-cities-worker` | Background Worker (Docker) | starter (no free plan for workers) |
+| `codebase-cities-db` | Postgres 16 | free (time-limited by Render) |
+| `codebase-cities-redis` | Key Value (Redis-compatible) | free |
+
+1. Push this repository to GitHub (Render deploys from it).
+2. In the [Render dashboard](https://dashboard.render.com): **New → Blueprint**, connect the
+   repository, and apply `render.yaml`. Paste your `GITHUB_TOKEN` when asked (it goes to the
+   API and the worker).
+3. When the deploy finishes, check the API's URL. If it isn't
+   `https://codebase-cities-api.onrender.com`, put the real one in the `/api/*` rewrite of the
+   website in `render.yaml`, then push.
+4. Open the website's URL and build a city. Then look at the API's logs: each request shows the
+   visitor's address. If every request shows the same address, set `FORWARDED_ALLOW_IPS` to
+   `*` on the API service, or the rate limit would count all visitors as one.
+
+Every push to `main` redeploys automatically; migrations run when the API starts. Plans and
+prices change, so check [render.com/pricing](https://render.com/pricing). Before keeping
+real data, upgrade the free Postgres, because Render removes free databases after a while.
+
 ## Known limitations
 
 - **History is approximate.** GitHub has no cheap star, fork, size, or language history, so the

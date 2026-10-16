@@ -1,0 +1,106 @@
+# Render Blueprint: creates every Codebase Cities service on Render from this repository.
+# In the Render dashboard: New > Blueprint, pick this repo, then fill in GITHUB_TOKEN when asked.
+# Plans and prices change; check render.com/pricing before you apply this.
+
+services:
+  # The API (FastAPI), built from backend/Dockerfile.
+  - type: web
+    name: codebase-cities-api
+    runtime: docker
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    plan: free # Free web services sleep after ~15 idle minutes; the first request wakes them.
+    region: frankfurt
+    healthCheckPath: /api/health
+    # Migrations run on every start, before the API serves traffic (works on every plan; on a
+    # paid plan you could move them to a preDeployCommand instead).
+    dockerCommand: >-
+      sh -c "alembic upgrade head &&
+      exec uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000 --proxy-headers"
+    envVars:
+      - key: PORT # Tells Render which port the API listens on.
+        value: "8000"
+      - key: ENVIRONMENT
+        value: production
+      - key: GITHUB_TOKEN
+        sync: false # Render asks for the value when you create the Blueprint.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: codebase-cities-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: codebase-cities-redis
+          property: connectionString
+      # Which proxies uvicorn trusts for the visitor's address (the rate limit counts by it).
+      # Render's internal proxies use private addresses. If the API's logs show the same client
+      # address for every visitor, change this to "*" in the dashboard.
+      - key: FORWARDED_ALLOW_IPS
+        value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+  # The ARQ worker that fetches from GitHub and builds cities. Same image, different command.
+  # Render has no free plan for background workers.
+  - type: worker
+    name: codebase-cities-worker
+    runtime: docker
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    plan: starter
+    region: frankfurt
+    dockerCommand: arq app.worker.WorkerSettings
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: codebase-cities-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: codebase-cities-redis
+          property: connectionString
+
+  # The website. Render builds it and serves the files from its CDN.
+  - type: web
+    name: codebase-cities
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: NODE_VERSION # Vite 8 needs a recent Node.
+        value: "24"
+    routes:
+      # Send API calls to the API service, so the site and API share one origin (no CORS).
+      # If Render gave the API a different address than this, update it here.
+      - type: rewrite
+        source: /api/*
+        destination: https://codebase-cities-api.onrender.com/api/*
+      # Share links like /city/octocat are pages of the single-page app.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      # Built assets have content hashes in their names, so they can be cached forever.
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+
+  # Redis-compatible store for the job queue, the city cache, and GitHub ETags.
+  - type: keyvalue
+    name: codebase-cities-redis
+    plan: free
+    region: frankfurt
+    ipAllowList: [] # Only services in this Render account can connect.
+    # Never evict keys to make room: a queued job must not silently disappear.
+    maxmemoryPolicy: noeviction
+
+databases:
+  - name: codebase-cities-db
+    plan: free # Render's free Postgres expires after a limited time; upgrade to keep the data.
+    region: frankfurt
+    postgresMajorVersion: "16"

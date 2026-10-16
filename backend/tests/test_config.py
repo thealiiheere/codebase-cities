@@ -18,6 +18,20 @@ def test_defaults() -> None:
     assert settings.database_url.startswith("postgresql+asyncpg://")
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgres://user:pw@dpg-abc-a/cities",  # Render and Heroku style
+        "postgresql://user:pw@dpg-abc-a/cities",
+        "postgresql+asyncpg://user:pw@dpg-abc-a/cities",  # Already right: unchanged.
+    ],
+)
+def test_database_url_always_uses_asyncpg(monkeypatch: pytest.MonkeyPatch, url: str) -> None:
+    monkeypatch.setenv("DATABASE_URL", url)
+
+    assert Settings(_env_file=None).database_url == "postgresql+asyncpg://user:pw@dpg-abc-a/cities"
+
+
 def test_reads_environment_variables(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_example")
     monkeypatch.setenv("MAX_REPOS_PER_USER", "25")
