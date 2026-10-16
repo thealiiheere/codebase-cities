@@ -1,12 +1,24 @@
-// Entry point: connects the page's controls, the backend API, and the 3D view.
+// Entry point: connects the page's controls, the backend API, the 3D view, and the music.
 
 import "./style.css";
 import { ApiError, buildCity, loadDemoCity, type CityResponse } from "./api";
 import { CityView } from "./city/scene";
-import { describeJob, getUi, hideTooltip, setBusy, setDayNightLabel, setStatus, showTooltip } from "./ui";
+import { MusicPlayer } from "./sound/player";
+import {
+  describeJob,
+  describeMusic,
+  getUi,
+  hideTooltip,
+  setBusy,
+  setDayNightLabel,
+  setPlayLabel,
+  setStatus,
+  showTooltip,
+} from "./ui";
 
 const ui = getUi();
 const view = new CityView(ui.viewport);
+const player = new MusicPlayer();
 
 ui.form.addEventListener("submit", (event) => {
   event.preventDefault(); // Stop the browser from reloading the page.
@@ -32,11 +44,53 @@ async function loadCity(username: string): Promise<void> {
 
 function show(response: CityResponse): void {
   view.show(response.city);
+  player.load(response.music);
   const repos = response.city.buildings.length;
-  ui.info.textContent = `${response.username} · ${repos} repo${repos === 1 ? "" : "s"} · as of ${response.as_of}`;
+  ui.cityInfo.textContent = `${response.username} · ${repos} repo${repos === 1 ? "" : "s"} · as of ${response.as_of}`;
+  ui.nowPlaying.textContent = describeMusic(response.music);
+  ui.play.disabled = !player.hasMusic;
+  setPlayLabel(ui, player.isPlaying);
 }
 
 ui.dayNight.addEventListener("click", () => setDayNightLabel(ui, view.toggleDayNight()));
+
+// --- Music ---
+
+ui.play.addEventListener("click", async () => {
+  if (player.isPlaying) {
+    player.pause();
+  } else {
+    await player.play(); // Inside the click handler, so the browser allows sound.
+  }
+  setPlayLabel(ui, player.isPlaying);
+});
+
+// The volume is remembered in this browser between visits. Storage can be unavailable
+// (private windows, blocked cookies), so every access is guarded and has a default.
+const VOLUME_KEY = "codebase-cities:volume";
+
+function savedVolume(): number {
+  try {
+    const raw = localStorage.getItem(VOLUME_KEY);
+    const stored = raw === null ? Number.NaN : Number(raw);
+    return stored >= 0 && stored <= 1 ? stored : 0.7; // NaN fails both checks.
+  } catch {
+    return 0.7;
+  }
+}
+
+const initialVolume = savedVolume();
+ui.volume.value = String(Math.round(initialVolume * 100));
+player.setVolume(initialVolume);
+ui.volume.addEventListener("input", () => {
+  const volume = Number(ui.volume.value) / 100;
+  player.setVolume(volume);
+  try {
+    localStorage.setItem(VOLUME_KEY, String(volume));
+  } catch {
+    // Not remembered this time; the slider still works.
+  }
+});
 
 // Hovering: raycasting on every pointer event would be wasteful, so do it at most once per
 // animation frame, with the latest pointer position.

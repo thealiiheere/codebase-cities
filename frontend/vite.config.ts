@@ -14,8 +14,9 @@ export default defineConfig({
     watch: { usePolling: process.env.VITE_USE_POLLING === "true" },
   },
   build: {
-    // Three.js alone is about 550 KB minified (~140 KB gzipped), above Vite's default 500 KB
-    // warning threshold. That's expected for a 3D app, so only warn past 800 KB.
-    chunkSizeWarningLimit: 800,
+    // Three.js (~550 KB minified) plus Tone.js (~280 KB) put the bundle around 870 KB
+    // (~220 KB gzipped), above Vite's default 500 KB warning threshold. That's expected for a
+    // 3D + audio app, so only warn past 1 MB.
+    chunkSizeWarningLimit: 1000,
   },
 });

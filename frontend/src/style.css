@@ -25,10 +25,24 @@ body {
 
 /* --- Top bar --- */
 
-.bar {
+.top {
   position: fixed;
   inset: 0 0 auto 0;
   z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  /* The container spans the width; let clicks and drags in its empty parts reach the city. */
+  pointer-events: none;
+}
+
+.top > * {
+  pointer-events: auto;
+}
+
+.bar {
+  align-self: stretch;
   display: flex;
   align-items: center;
   gap: 16px;
@@ -73,6 +87,7 @@ input:focus {
 button {
   cursor: pointer;
   background: #21262d;
+  white-space: nowrap;
 }
 
 button:hover:not(:disabled) {
@@ -84,18 +99,44 @@ button:disabled {
   cursor: progress;
 }
 
+/* Progress and error messages: a pill just under the top bar, so it always has room. */
 #status {
-  flex: 1;
-  min-width: 0;
-  font-size: 14px;
+  max-width: calc(100vw - 32px);
+  margin: 0 0 0 16px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 13px;
   color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--border);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+#status:empty {
+  display: none;
+}
+
 #status.error {
   color: var(--error);
+}
+
+.sound {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto; /* Push the sound and day/night controls to the right edge. */
+}
+
+#play {
+  min-width: 92px;
+}
+
+#volume {
+  width: 96px;
+  padding: 0;
+  accent-color: var(--accent);
 }
 
 /* --- 3D view --- */
@@ -123,17 +164,39 @@ button:disabled {
   position: fixed;
   left: 16px;
   bottom: 16px;
+  /* Leave room for the hint on the right; long lines end in "…" instead of overlapping. */
+  max-width: calc(100vw - 460px);
   font-size: 13px;
+  line-height: 1.6;
   color: var(--muted);
+}
+
+#info > div {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 #hint {
   position: fixed;
   right: 16px;
   bottom: 16px;
+  max-width: 420px;
   margin: 0;
   font-size: 12px;
+  text-align: right;
   color: var(--muted);
+}
+
+/* On narrower screens drop the hint and let the info line use the full width. */
+@media (max-width: 900px) {
+  #hint {
+    display: none;
+  }
+
+  #info {
+    max-width: calc(100vw - 32px);
+  }
 }
 
 #tooltip {
@@ -166,9 +229,5 @@ button:disabled {
 
   input {
     width: 140px;
-  }
-
-  #hint {
-    display: none;
   }
 }

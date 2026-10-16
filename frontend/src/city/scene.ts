@@ -32,7 +32,9 @@ export class CityView {
     // little visible gain.
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Percentage-closer filtering smooths shadow edges. (Three.js removed the separate "soft"
+    // variant; this is its replacement.)
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     // Filmic tone mapping keeps bright window glow from blowing out to flat white.
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     container.appendChild(this.renderer.domElement);

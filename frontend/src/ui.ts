@@ -1,15 +1,18 @@
 // The page's HTML controls (defined in index.html): finding them and updating them.
 
-import type { Building, Job } from "./api";
+import type { Building, Job, MusicParams } from "./api";
 
 export interface Ui {
   form: HTMLFormElement;
   username: HTMLInputElement;
   submit: HTMLButtonElement;
   status: HTMLElement;
+  play: HTMLButtonElement;
+  volume: HTMLInputElement;
   dayNight: HTMLButtonElement;
   viewport: HTMLElement;
-  info: HTMLElement;
+  cityInfo: HTMLElement;
+  nowPlaying: HTMLElement;
   tooltip: HTMLElement;
 }
 
@@ -27,11 +30,28 @@ export function getUi(): Ui {
     username: find("#username"),
     submit: find('#search button[type="submit"]'),
     status: find("#status"),
+    play: find("#play"),
+    volume: find("#volume"),
     dayNight: find("#daynight"),
     viewport: find("#viewport"),
-    info: find("#info"),
+    cityInfo: find("#city-info"),
+    nowPlaying: find("#now-playing"),
     tooltip: find("#tooltip"),
   };
+}
+
+/** The play button names what it will do. */
+export function setPlayLabel(ui: Ui, isPlaying: boolean): void {
+  ui.play.textContent = isPlaying ? "⏸ Pause" : "▶ Play";
+}
+
+/** e.g. "♪ 96 BPM · F dorian · Python piano, Go fm-bass, HTML pad" */
+export function describeMusic(music: MusicParams): string {
+  if (music.tracks.length === 0) {
+    return "♪ No code to play yet";
+  }
+  const tracks = music.tracks.map((track) => `${track.language} ${track.instrument}`).join(", ");
+  return `♪ ${music.tempo_bpm} BPM · ${music.key} ${music.scale} · ${tracks}`;
 }
 
 export function setStatus(ui: Ui, text: string, isError = false): void {

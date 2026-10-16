@@ -19,6 +19,10 @@ full design and build phases. (A proper README with screenshots arrives in phase
 - Phase 6 (frontend city): Vite + TypeScript + Three.js in `frontend/`. Buildings are stacks of
   floors with lit windows at night, on language districts around a plaza, linked by bridges;
   orbit camera, day/night toggle, hover tooltips.
+- Phase 7 (frontend sound): Tone.js plays each city's music from the backend's music JSON:
+  one synthesized instrument per language, tempo and swing from commit rhythm, with play/pause
+  and a volume slider (remembered per browser). Sound starts on the first Play click, as
+  browsers require.
 
 ## API so far
 
