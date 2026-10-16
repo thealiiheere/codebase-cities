@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     # Cap on repos ingested per user, most recently pushed first.
     max_repos_per_user: int = Field(default=100, ge=1, le=1000)
 
+    github_api_url: str = "https://api.github.com"
+    # Newest commits fetched per repo. Older ones still count toward the repo's total.
+    github_max_commits_per_repo: int = Field(default=5000, ge=100)
+    # Start waiting (or give up) when this little quota is left, keeping some in reserve.
+    github_rate_limit_reserve: int = Field(default=50, ge=0)
+    # Longest we will sleep for a rate limit reset before failing with a clear error instead.
+    github_max_wait_seconds: float = Field(default=60, ge=0)
+    github_max_retries: int = Field(default=3, ge=0, le=10)
+    github_timeout_seconds: float = Field(default=30, gt=0)
+
 
 @lru_cache
 def get_settings() -> Settings:

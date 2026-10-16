@@ -4,11 +4,15 @@ from pathlib import Path
 
 import httpx
 import pytest
+import respx
 from alembic.config import Config
 from fastapi import FastAPI
 
 from app.config import Settings
+from app.github.client import GitHubClient
+from app.github.transport import GitHubTransport
 from app.main import create_app
+from tests.github_fakes import FakeTime
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -42,6 +46,33 @@ async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
 @pytest.fixture
 def alembic_config() -> Config:
     return Config(str(BACKEND_DIR / "alembic.ini"))
+
+
+@pytest.fixture
+def fake_time() -> FakeTime:
+    return FakeTime()
+
+
+@pytest.fixture
+async def github_transport(
+    fake_time: FakeTime, respx_mock: respx.MockRouter
+) -> AsyncIterator[GitHubTransport]:
+    # Depending on respx_mock means every GitHub test runs with HTTP mocked: any request that
+    # has no matching mocked route fails instead of reaching the real API.
+    async with GitHubTransport(
+        "test-token",
+        max_retries=3,
+        rate_limit_reserve=50,
+        max_wait_seconds=60,
+        sleep=fake_time.sleep,
+        clock=fake_time.now,
+    ) as transport:
+        yield transport
+
+
+@pytest.fixture
+def github(github_transport: GitHubTransport) -> GitHubClient:
+    return GitHubClient(github_transport, max_commits_per_repo=5000)
 
 
 @pytest.fixture

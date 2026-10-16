@@ -5,8 +5,10 @@ full design and build phases. (A proper README with screenshots arrives in phase
 
 ## Status
 
-Phase 1 (foundation): project scaffolding, config, database models and migrations, health
-endpoint, CI.
+- Phase 1 (foundation): project scaffolding, config, database models and migrations, health
+  endpoint, CI.
+- Phase 2 (GitHub client): async GraphQL + REST client with rate limit handling, ETags, and
+  retries, in `backend/app/github/`.
 
 ## Running locally
 
@@ -26,7 +28,7 @@ interactive docs at http://localhost:8000/docs. Migrations run automatically on 
 uv sync                          # install dependencies (uv fetches Python 3.12 if needed)
 uv run pytest                    # tests
 uv run ruff check . && uv run ruff format --check .
-uv run mypy app tests migrations
+uv run mypy app tests migrations scripts
 uv run alembic upgrade head      # apply migrations (needs Postgres running)
 uv run alembic revision --autogenerate -m "describe change"   # new migration from model changes
 ```
@@ -39,3 +41,12 @@ TEST_DATABASE_URL=postgresql+asyncpg://cities:cities@localhost:5432/cities uv ru
 ```
 
 Note that the integration test drops and recreates all tables in that database.
+
+### Checking the GitHub client against the real API
+
+Tests never call GitHub, so they can't catch a wrong GraphQL field name. With `GITHUB_TOKEN` in
+`.env`, run this from `backend/` to exercise every client method once:
+
+```bash
+uv run python -m scripts.github_smoke octocat
+```
