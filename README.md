@@ -11,6 +11,9 @@ full design and build phases. (A proper README with screenshots arrives in phase
   retries, in `backend/app/github/`.
 - Phase 3 (ingestion and jobs): ARQ worker, fetch/normalize/store pipeline, job tracking, and
   the endpoints below.
+- Phase 4 (mapping engine): pure, deterministic functions in `backend/app/mapping/` that turn a
+  user's data into a city layout (`build_city`) and music parameters (`build_music`), plus
+  `snapshot_at` for the timeline. Not yet wired into the API (phase 5).
 
 ## API so far
 
