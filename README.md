@@ -13,13 +13,16 @@ full design and build phases. (A proper README with screenshots arrives in phase
   the endpoints below.
 - Phase 4 (mapping engine): pure, deterministic functions in `backend/app/mapping/` that turn a
   user's data into a city layout (`build_city`) and music parameters (`build_music`), plus
-  `snapshot_at` for the timeline. Not yet wired into the API (phase 5).
+  `snapshot_at` for the timeline.
+- Phase 5 (city API and caching): `GET /api/cities/{username}` with the `until` timeline
+  parameter; rendered cities cached in Redis, built by the worker right after ingestion.
 
 ## API so far
 
 | Request | Result |
 | --- | --- |
-| `POST /api/cities/{username}` | `202` + job (and `Location` header) when data must be fetched; `200` when stored data is fresh; `404` for unknown users; `503` when GitHub is rate limited (with `Retry-After`) |
+| `POST /api/cities/{username}` | `202` + job (and `Location` header) when data must be fetched; `200` + the city when stored data is fresh; `404` for unknown users; `503` when GitHub is rate limited (with `Retry-After`) |
+| `GET /api/cities/{username}?until=YYYY-MM-DD` | The city layout and music, optionally as of a past date; `404` until the city has been built once |
 | `GET /api/jobs/{job_id}` | The job: `status` is `queued`, `fetching`, `building`, `done`, or `failed` (with an `error` message) |
 | `GET /api/health` | `200` when Postgres and Redis respond, else `503` |
 

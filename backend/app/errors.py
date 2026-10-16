@@ -42,6 +42,10 @@ class JobNotFoundError(NotFoundError):
     code = "job_not_found"
 
 
+class CityNotFoundError(NotFoundError):
+    code = "city_not_found"
+
+
 class GitHubRateLimitedError(ServiceUnavailableError):
     code = "github_rate_limited"
 

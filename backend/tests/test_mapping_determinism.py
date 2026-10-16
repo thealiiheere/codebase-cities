@@ -79,8 +79,8 @@ def test_output_is_identical_across_processes() -> None:
 # The exact output for SAMPLE. If this fails, the city or music for existing users changed:
 # bump MAPPING_VERSION in app/mapping/version.py (so cached cities rebuild), then update both
 # values here.
-GOLDEN_VERSION = 1
-GOLDEN_DIGEST = "d8fb32e560984d025661b773e5e4f3eff9e79e7f5599250c05349a7134441663"
+GOLDEN_VERSION = 2
+GOLDEN_DIGEST = "7842f4c93d0250f8d75c14abeb69d201304e21cffc2c07370b914357f317de74"
 
 
 def test_golden_output() -> None:

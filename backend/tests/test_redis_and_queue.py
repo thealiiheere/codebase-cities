@@ -5,7 +5,7 @@ from arq.connections import ArqRedis
 from arq.jobs import Job as ArqJob
 from redis.asyncio import Redis
 
-from app.cache import ETAG_KEY_PREFIX, ETAG_TTL_SECONDS, RedisEtagStore
+from app.cache import ETAG_KEY_PREFIX, ETAG_TTL_SECONDS, RedisCityCache, RedisEtagStore
 from app.github.etag import CachedResponse
 from app.queue import INGEST_USER_JOB, ArqJobQueue
 from app.worker import WorkerSettings, shutdown
@@ -49,3 +49,14 @@ async def test_queue_enqueues_one_arq_job_per_job_id(
     assert info.args == (str(job_id),)
     assert len(await arq_redis.queued_jobs()) == 1
     await queue.aclose()
+
+
+@pytest.mark.integration
+async def test_city_cache_round_trip(redis_client: Redis) -> None:
+    cache = RedisCityCache(redis_client, ttl_seconds=600)
+
+    assert await cache.get("city:v2:octocat:1:latest") is None
+    await cache.set("city:v2:octocat:1:latest", '{"city": {}}')
+
+    assert await cache.get("city:v2:octocat:1:latest") == '{"city": {}}'
+    assert 0 < await redis_client.ttl("city:v2:octocat:1:latest") <= 600

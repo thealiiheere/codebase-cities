@@ -8,7 +8,7 @@ from typing import Any
 
 from arq.connections import RedisSettings
 
-from app.cache import RedisEtagStore, create_redis
+from app.cache import RedisEtagStore, create_city_cache, create_redis
 from app.config import get_settings
 from app.db import create_engine, create_session_factory
 from app.github.client import create_github_client
@@ -26,6 +26,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["engine"] = engine
     ctx["redis"] = redis
     ctx["session_factory"] = create_session_factory(engine)
+    ctx["city_cache"] = create_city_cache(redis, settings)
     # Raises GitHubAuthError without a token, so a misconfigured worker fails loudly at startup.
     ctx["github"] = create_github_client(settings, RedisEtagStore(redis))
 
@@ -48,6 +49,7 @@ async def ingest_user(ctx: dict[str, Any], job_id: str) -> None:
         session_factory=ctx["session_factory"],
         github=ctx["github"],
         max_repos=ctx["settings"].max_repos_per_user,
+        city_cache=ctx["city_cache"],
     )
 
 

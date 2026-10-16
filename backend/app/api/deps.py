@@ -7,6 +7,7 @@ from fastapi import Depends, Request
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.cache import CityCache
 from app.config import Settings
 from app.ingestion.fetch import GitHubSource
 from app.queue import JobQueue
@@ -35,8 +36,13 @@ def get_queue(request: Request) -> JobQueue:
     return cast(JobQueue, request.app.state.queue)
 
 
+def get_city_cache(request: Request) -> CityCache:
+    return cast(CityCache, request.app.state.city_cache)
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 RedisDep = Annotated[Redis, Depends(get_redis)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 GitHubDep = Annotated[GitHubSource | None, Depends(get_github)]
 QueueDep = Annotated[JobQueue, Depends(get_queue)]
+CityCacheDep = Annotated[CityCache, Depends(get_city_cache)]

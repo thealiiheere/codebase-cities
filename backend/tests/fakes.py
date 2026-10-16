@@ -100,3 +100,28 @@ class FakeQueue:
         if self.error:
             raise self.error
         self.enqueued.append(job_id)
+
+
+class FakeCityCache:
+    """Dict-backed city cache that counts hits and misses. `error` makes every call fail."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.entries: dict[str, str] = {}
+        self.hits = 0
+        self.misses = 0
+
+    async def get(self, key: str) -> str | None:
+        if self.error:
+            raise self.error
+        value = self.entries.get(key)
+        if value is None:
+            self.misses += 1
+        else:
+            self.hits += 1
+        return value
+
+    async def set(self, key: str, value: str) -> None:
+        if self.error:
+            raise self.error
+        self.entries[key] = value

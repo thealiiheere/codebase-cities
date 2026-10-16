@@ -1,7 +1,7 @@
-"""POST /api/cities/{username} and GET /api/jobs/{job_id}, against a real database.
+"""The city and job endpoints, against a real database.
 
-GitHub and the job queue are replaced with in-memory fakes through FastAPI's dependency
-overrides, so these tests exercise routing, validation, services, and SQL together.
+GitHub, the job queue, and the city cache are replaced with in-memory fakes through FastAPI's
+dependency overrides, so these tests exercise routing, validation, services, and SQL together.
 """
 
 import datetime as dt
@@ -14,11 +14,11 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api.deps import get_github, get_queue, get_session
+from app.api.deps import get_city_cache, get_github, get_queue, get_session
 from app.github.errors import RateLimitExceededError
 from app.models import GithubUser, Job, JobStatus
 from app.services.ingestion import run_ingestion_job
-from tests.fakes import FakeGitHub, FakeQueue, make_profile, make_repo
+from tests.fakes import FakeCityCache, FakeGitHub, FakeQueue, make_profile, make_repo
 
 
 def utcnow() -> dt.datetime:
@@ -36,11 +36,17 @@ def fake_queue() -> FakeQueue:
 
 
 @pytest.fixture
+def fake_cache() -> FakeCityCache:
+    return FakeCityCache()
+
+
+@pytest.fixture
 def api(
     app: FastAPI,
     session_factory: async_sessionmaker[AsyncSession],
     fake_github: FakeGitHub,
     fake_queue: FakeQueue,
+    fake_cache: FakeCityCache,
 ) -> FastAPI:
     async def real_session() -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
@@ -49,7 +55,26 @@ def api(
     app.dependency_overrides[get_session] = real_session
     app.dependency_overrides[get_github] = lambda: fake_github
     app.dependency_overrides[get_queue] = lambda: fake_queue
+    app.dependency_overrides[get_city_cache] = lambda: fake_cache
     return app
+
+
+async def ingest(
+    client: httpx.AsyncClient,
+    queue: FakeQueue,
+    session_factory: async_sessionmaker[AsyncSession],
+    github: FakeGitHub,
+    cache: FakeCityCache | None = None,
+) -> None:
+    """Request a city, then do what the worker would do with the enqueued job."""
+    await client.post("/api/cities/octocat")
+    await run_ingestion_job(
+        queue.enqueued[-1],
+        session_factory=session_factory,
+        github=github,
+        max_repos=100,
+        city_cache=cache,
+    )
 
 
 async def jobs_in_db(session: AsyncSession) -> list[Job]:
@@ -156,8 +181,13 @@ async def test_fresh_data_is_200_without_asking_github(
     response = await client.post("/api/cities/octocat")
 
     assert response.status_code == 200
-    assert response.json()["username"] == "octocat"
-    assert dt.datetime.fromisoformat(response.json()["fetched_at"]) == fetched_at
+    body = response.json()
+    assert body["username"] == "octocat"
+    assert dt.datetime.fromisoformat(body["fetched_at"]) == fetched_at
+    assert body["until"] is None
+    assert body["timeline"] == {"start": "2011-01-25", "end": fetched_at.date().isoformat()}
+    assert body["city"]["buildings"] == []  # This user has no repos stored.
+    assert body["music"]["tracks"] == []
     assert fake_github.calls == []
 
 
@@ -232,20 +262,122 @@ async def test_request_ingest_poll_then_fresh(
     client: httpx.AsyncClient,
     fake_github: FakeGitHub,
     fake_queue: FakeQueue,
+    fake_cache: FakeCityCache,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     job_id = (await client.post("/api/cities/octocat")).json()["id"]
 
-    # Do what the worker would do with the enqueued job.
+    # Do what the worker would do with the enqueued job, including caching the city.
     await run_ingestion_job(
-        fake_queue.enqueued[0], session_factory=session_factory, github=fake_github, max_repos=100
+        fake_queue.enqueued[0],
+        session_factory=session_factory,
+        github=fake_github,
+        max_repos=100,
+        city_cache=fake_cache,
     )
 
     polled = (await client.get(f"/api/jobs/{job_id}")).json()
     assert polled["status"] == "done"
     assert polled["finished_at"] is not None
+    assert len(fake_cache.entries) == 1  # The worker cached the latest city.
+
     again = await client.post("/api/cities/octocat")
     assert again.status_code == 200
+    assert [b["repo"] for b in again.json()["city"]["buildings"]] == ["city"]
+    assert fake_cache.hits == 1  # Served from the worker's cache entry.
+
+
+# --- GET /api/cities/{username} ----------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_city_never_built_is_404(api: FastAPI, client: httpx.AsyncClient) -> None:
+    response = await client.get("/api/cities/octocat")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "city_not_found"
+
+
+@pytest.mark.integration
+async def test_city_is_built_once_then_served_from_cache(
+    api: FastAPI,
+    client: httpx.AsyncClient,
+    fake_github: FakeGitHub,
+    fake_queue: FakeQueue,
+    fake_cache: FakeCityCache,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await ingest(client, fake_queue, session_factory, fake_github)  # No caching by the worker.
+
+    first = await client.get("/api/cities/OctoCat")
+    second = await client.get("/api/cities/octocat")
+
+    assert first.status_code == second.status_code == 200
+    assert first.content == second.content
+    assert (fake_cache.misses, fake_cache.hits, len(fake_cache.entries)) == (1, 1, 1)
+    body = first.json()
+    assert body["city"]["version"] == body["music"]["version"]
+    assert body["city"]["buildings"][0]["floors"] >= 1
+
+
+@pytest.mark.integration
+async def test_until_shows_the_city_as_it_was(
+    api: FastAPI,
+    client: httpx.AsyncClient,
+    fake_github: FakeGitHub,
+    fake_queue: FakeQueue,
+    fake_cache: FakeCityCache,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    fake_github.repos = [
+        make_repo("old", 1, created_at=dt.datetime(2018, 1, 1, tzinfo=dt.UTC)),
+        make_repo("new", 2, created_at=dt.datetime(2022, 1, 1, tzinfo=dt.UTC)),
+    ]
+    await ingest(client, fake_queue, session_factory, fake_github)
+
+    latest = (await client.get("/api/cities/octocat")).json()
+    past = (await client.get("/api/cities/octocat", params={"until": "2019-12-31"})).json()
+
+    assert sorted(b["repo"] for b in latest["city"]["buildings"]) == ["new", "old"]
+    assert [b["repo"] for b in past["city"]["buildings"]] == ["old"]
+    assert (past["until"], past["as_of"], past["city"]["as_of"]) == ("2019-12-31",) * 3
+    assert len(fake_cache.entries) == 2  # Each timeline date is cached separately.
+
+
+@pytest.mark.integration
+async def test_until_at_or_after_the_fetch_day_is_the_latest_city(
+    api: FastAPI,
+    client: httpx.AsyncClient,
+    fake_github: FakeGitHub,
+    fake_queue: FakeQueue,
+    fake_cache: FakeCityCache,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await ingest(client, fake_queue, session_factory, fake_github)
+
+    latest = await client.get("/api/cities/octocat")
+    future = await client.get("/api/cities/octocat", params={"until": "2999-01-01"})
+
+    assert future.json()["until"] is None
+    assert future.content == latest.content
+    assert len(fake_cache.entries) == 1
+
+
+@pytest.mark.integration
+async def test_a_broken_cache_does_not_break_the_city(
+    api: FastAPI,
+    client: httpx.AsyncClient,
+    fake_github: FakeGitHub,
+    fake_queue: FakeQueue,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await ingest(client, fake_queue, session_factory, fake_github)
+    api.dependency_overrides[get_city_cache] = lambda: FakeCityCache(error=ConnectionError("down"))
+
+    response = await client.get("/api/cities/octocat")
+
+    assert response.status_code == 200
+    assert response.json()["city"]["buildings"]
 
 
 # --- Validation (no database needed) -----------------------------------------------------------
@@ -259,6 +391,7 @@ def offline_api(app: FastAPI) -> FastAPI:
     app.dependency_overrides[get_session] = no_session
     app.dependency_overrides[get_github] = lambda: None
     app.dependency_overrides[get_queue] = lambda: FakeQueue()
+    app.dependency_overrides[get_city_cache] = lambda: FakeCityCache()
     return app
 
 
@@ -271,6 +404,16 @@ async def test_invalid_usernames_are_422(
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_error"
     assert response.json()["error"]["message"].startswith("path.username:")
+
+
+@pytest.mark.parametrize("until", ["2020-13-01", "yesterday", "20200101x"])
+async def test_malformed_until_is_422(
+    offline_api: FastAPI, client: httpx.AsyncClient, until: str
+) -> None:
+    response = await client.get("/api/cities/octocat", params={"until": until})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["message"].startswith("query.until:")
 
 
 async def test_malformed_job_id_is_422(offline_api: FastAPI, client: httpx.AsyncClient) -> None:

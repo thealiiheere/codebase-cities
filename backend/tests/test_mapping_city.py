@@ -7,6 +7,7 @@ import pytest
 from app.mapping import CityLayout, build_city
 from app.mapping.city import (
     AVENUE_WIDTH,
+    FLOOR_HEIGHT,
     MAX_FOOTPRINT,
     MAX_HEIGHT,
     MAX_ROOF_LIGHTS,
@@ -40,6 +41,17 @@ def test_more_commits_means_taller_within_limits() -> None:
     assert heights == sorted(heights)
     assert heights[0] == MIN_HEIGHT
     assert heights[-1] == MAX_HEIGHT
+
+
+@pytest.mark.parametrize(
+    ("commits", "floors"),
+    [(0, 1), (1, 1), (10, 8), (100, 16), (1000, 23), (20_000, 33), (10**6, 33)],
+)
+def test_buildings_are_whole_floors_that_grow_with_commits(commits: int, floors: int) -> None:
+    building = city_of(repo("r", 1, total_commits=commits)).buildings[0]
+
+    assert building.floors == floors
+    assert building.height == floors * FLOOR_HEIGHT
 
 
 def test_bigger_repos_have_bigger_footprints_within_limits() -> None:

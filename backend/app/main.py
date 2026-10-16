@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api import api_router
-from app.cache import RedisEtagStore, create_redis
+from app.cache import RedisEtagStore, create_city_cache, create_redis
 from app.config import Settings, get_settings
 from app.db import create_engine, create_session_factory
 from app.errors import register_error_handlers
@@ -34,6 +34,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         app.state.session_factory = create_session_factory(engine)
         app.state.redis = redis
+        app.state.city_cache = create_city_cache(redis, resolved)
         app.state.queue = queue
         app.state.github = github
         try:

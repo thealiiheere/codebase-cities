@@ -8,12 +8,14 @@ from collections.abc import Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.cache import CityCache
 from app.github.errors import GitHubError
 from app.ingestion.fetch import GitHubSource, fetch_user_data
 from app.ingestion.store import store_user_data
 from app.models import Job, JobStatus
 from app.models.job import ACTIVE_JOB_STATUSES
 from app.services import jobs
+from app.services.city_payload import get_city_json
 from app.services.github_errors import failure_message
 
 logger = logging.getLogger(__name__)
@@ -34,9 +36,13 @@ async def run_ingestion_job(
     session_factory: async_sessionmaker[AsyncSession],
     github: GitHubSource,
     max_repos: int,
+    city_cache: CityCache | None = None,
     clock: Clock = _utcnow,
 ) -> None:
-    """Run one job. Never raises for expected failures; they end up in the job's error field."""
+    """Run one job. Never raises for expected failures; they end up in the job's error field.
+
+    With a city cache, the latest city is also built and cached, so the first view is instant.
+    """
     username = await _claim(session_factory, job_id)
     if username is None:
         return
@@ -48,7 +54,9 @@ async def run_ingestion_job(
         # One transaction, so readers never see half of the new data.
         async with session_factory() as session, session.begin():
             await store_user_data(session, data, fetched_at=clock())
-        # Phases 4 and 5 add here: map the stored data to a city and music, and cache both.
+        if city_cache is not None:
+            async with session_factory() as session:
+                await get_city_json(session, city_cache, username)
         error = None
     except GitHubError as exc:
         error = failure_message(exc)

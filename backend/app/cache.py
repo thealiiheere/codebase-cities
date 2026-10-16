@@ -1,7 +1,7 @@
 """Redis helpers."""
 
 import json
-from typing import cast
+from typing import Protocol, cast
 
 from redis.asyncio import Redis
 
@@ -35,3 +35,28 @@ class RedisEtagStore:
     async def set(self, key: str, value: CachedResponse) -> None:
         raw = json.dumps({"etag": value.etag, "body": value.body})
         await self._redis.set(ETAG_KEY_PREFIX + key, raw, ex=ETAG_TTL_SECONDS)
+
+
+class CityCache(Protocol):
+    """Rendered city payloads (JSON text) by cache key."""
+
+    async def get(self, key: str) -> str | None: ...
+
+    async def set(self, key: str, value: str) -> None: ...
+
+
+class RedisCityCache:
+    def __init__(self, redis: Redis, ttl_seconds: int) -> None:
+        self._redis = redis
+        self._ttl = ttl_seconds
+
+    async def get(self, key: str) -> str | None:
+        value = await self._redis.get(key)
+        return cast(str | None, value)
+
+    async def set(self, key: str, value: str) -> None:
+        await self._redis.set(key, value, ex=self._ttl)
+
+
+def create_city_cache(redis: Redis, settings: Settings) -> RedisCityCache:
+    return RedisCityCache(redis, ttl_seconds=round(settings.city_cache_ttl_hours * 3600))

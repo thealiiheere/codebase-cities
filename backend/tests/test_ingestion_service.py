@@ -8,13 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.github.errors import GitHubApiError, RateLimitExceededError
 from app.models import GithubUser, Job, JobStatus, Repo
 from app.services import jobs
+from app.services.city_payload import cache_key
 from app.services.github_errors import GITHUB_UNAVAILABLE_MESSAGE
 from app.services.ingestion import (
     TIMEOUT_MESSAGE,
     UNEXPECTED_ERROR_MESSAGE,
     run_ingestion_job,
 )
-from tests.fakes import T0, FakeGitHub, make_history, make_profile, make_repo
+from tests.fakes import T0, FakeCityCache, FakeGitHub, make_history, make_profile, make_repo
 
 pytestmark = pytest.mark.integration
 
@@ -142,3 +143,41 @@ async def test_failed_refresh_keeps_previous_data(
     previous = await session.scalar(select(GithubUser.fetched_at))
     assert previous == T0
     assert isinstance(previous, dt.datetime)
+
+
+async def test_successful_job_caches_the_latest_city(
+    session: AsyncSession, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    cache = FakeCityCache()
+    job = await new_job(session)
+
+    await run_ingestion_job(
+        job.id,
+        session_factory=session_factory,
+        github=octocat_github(),
+        max_repos=100,
+        city_cache=cache,
+        clock=lambda: T0,
+    )
+
+    [(key, body)] = cache.entries.items()
+    assert key == cache_key("octocat", T0, None)
+    assert '"repo":"city"' in body
+
+
+async def test_a_broken_cache_does_not_fail_the_job(
+    session: AsyncSession, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    job = await new_job(session)
+
+    await run_ingestion_job(
+        job.id,
+        session_factory=session_factory,
+        github=octocat_github(),
+        max_repos=100,
+        city_cache=FakeCityCache(error=ConnectionError("redis down")),
+        clock=lambda: T0,
+    )
+
+    await session.refresh(job)
+    assert job.status == JobStatus.DONE
