@@ -1,0 +1,179 @@
+// Typed client for the backend API.
+//
+// The interfaces below mirror the backend's response models (backend/app/schemas/ and
+// backend/app/mapping/). If you change a field there, change it here too.
+
+export interface Building {
+  repo: string;
+  district: string;
+  /** Center of the footprint on the ground (meters). */
+  x: number;
+  z: number;
+  /** Side length of the square footprint. */
+  size: number;
+  floors: number;
+  /** Always floors * floor height. */
+  height: number;
+  color: string;
+  /** 0..1: the share of floors with lit windows at night. */
+  window_brightness: number;
+  roof_lights: number;
+  /** 0..3: flat roof, setback top, antenna, rooftop box. */
+  style: number;
+  stars: number;
+  forks: number;
+  commits: number;
+  recent_commits: number;
+}
+
+export interface District {
+  language: string;
+  color: string;
+  x: number;
+  z: number;
+  width: number;
+  depth: number;
+  repo_count: number;
+}
+
+export interface Bridge {
+  from_repo: string;
+  to_repo: string;
+  /** 0..1 */
+  strength: number;
+}
+
+export interface CityLayout {
+  version: number;
+  username: string;
+  as_of: string;
+  plaza: { size: number };
+  districts: District[];
+  buildings: Building[];
+  bridges: Bridge[];
+  /** Distance from the center to the farthest district corner. */
+  radius: number;
+}
+
+export interface Track {
+  language: string;
+  role: string;
+  instrument: string;
+  volume: number;
+  share: number;
+  steps: string[][];
+}
+
+export interface MusicParams {
+  version: number;
+  username: string;
+  as_of: string;
+  tempo_bpm: number;
+  tempo_variation: number;
+  key: string;
+  scale: string;
+  intensity: number;
+  bars: number;
+  steps_per_bar: number;
+  tracks: Track[];
+}
+
+export interface CityResponse {
+  username: string;
+  fetched_at: string;
+  as_of: string;
+  until: string | null;
+  timeline: { start: string; end: string };
+  city: CityLayout;
+  music: MusicParams;
+}
+
+export type JobStatus = "queued" | "fetching" | "building" | "done" | "failed";
+
+export interface Job {
+  id: string;
+  username: string;
+  status: JobStatus;
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+/** An error response from the API, which always looks like {"error": {"code", "message"}}. */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+async function request<T>(method: "GET" | "POST", path: string): Promise<{ status: number; body: T }> {
+  const response = await fetch(path, { method, headers: { Accept: "application/json" } });
+  // A response without a JSON body (e.g. a proxy error page) still needs a sensible error.
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const error = (body as { error?: { code?: string; message?: string } } | null)?.error;
+    throw new ApiError(
+      response.status,
+      error?.code ?? "http_error",
+      error?.message ?? `The server answered ${response.status}.`,
+    );
+  }
+  return { status: response.status, body: body as T };
+}
+
+const cityPath = (username: string) => `/api/cities/${encodeURIComponent(username)}`;
+
+/** Ask for a city: either it's ready now (200), or a job was started (202). */
+export async function requestCity(
+  username: string,
+): Promise<{ kind: "ready"; city: CityResponse } | { kind: "queued"; job: Job }> {
+  const { status, body } = await request<CityResponse | Job>("POST", cityPath(username));
+  return status === 202 ? { kind: "queued", job: body as Job } : { kind: "ready", city: body as CityResponse };
+}
+
+export async function getJob(id: string): Promise<Job> {
+  return (await request<Job>("GET", `/api/jobs/${encodeURIComponent(id)}`)).body;
+}
+
+export async function getCity(username: string, until?: string): Promise<CityResponse> {
+  const query = until ? `?until=${encodeURIComponent(until)}` : "";
+  return (await request<CityResponse>("GET", cityPath(username) + query)).body;
+}
+
+/** A city built from a made-up profile, so the frontend works without a backend. */
+export async function loadDemoCity(): Promise<CityResponse> {
+  return (await request<CityResponse>("GET", "/demo-city.json")).body;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Get a user's city, waiting for the backend to build it if needed.
+ * `onProgress` is called with the job each time its status is checked.
+ */
+export async function buildCity(
+  username: string,
+  onProgress: (job: Job) => void,
+  pollIntervalMs = 1000,
+): Promise<CityResponse> {
+  const first = await requestCity(username);
+  if (first.kind === "ready") {
+    return first.city;
+  }
+  let job = first.job;
+  onProgress(job);
+  while (job.status !== "done") {
+    if (job.status === "failed") {
+      throw new ApiError(0, "job_failed", job.error ?? "Building this city failed.");
+    }
+    await sleep(pollIntervalMs);
+    job = await getJob(job.id);
+    onProgress(job);
+  }
+  return getCity(username);
+}

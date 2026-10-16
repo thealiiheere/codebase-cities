@@ -1,4 +1,4 @@
-# Local development stack. The frontend service arrives in phase 6.
+# Local development stack: Postgres, Redis, the API, the ingestion worker, and the frontend.
 
 # Settings shared by the api and worker services (a YAML anchor, merged in with `<<:`).
 x-backend: &backend
@@ -61,5 +61,23 @@ services:
     # `docker compose restart worker` after editing backend code.
     command: arq app.worker.WorkerSettings
 
+  frontend:
+    image: node:24-alpine
+    working_dir: /app
+    # `npm ci` installs Linux builds of the packages into a container-only volume, so they never
+    # mix with the Windows node_modules folder on your machine.
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+    environment:
+      API_PROXY_TARGET: http://api:8000
+      VITE_USE_POLLING: "true"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    depends_on:
+      - api
+
 volumes:
   pgdata:
+  frontend_node_modules:

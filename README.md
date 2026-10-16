@@ -16,6 +16,9 @@ full design and build phases. (A proper README with screenshots arrives in phase
   `snapshot_at` for the timeline.
 - Phase 5 (city API and caching): `GET /api/cities/{username}` with the `until` timeline
   parameter; rendered cities cached in Redis, built by the worker right after ingestion.
+- Phase 6 (frontend city): Vite + TypeScript + Three.js in `frontend/`. Buildings are stacks of
+  floors with lit windows at night, on language districts around a plaza, linked by bridges;
+  orbit camera, day/night toggle, hover tooltips.
 
 ## API so far
 
@@ -37,10 +40,23 @@ cp .env.example .env        # then fill in GITHUB_TOKEN
 docker compose up --build
 ```
 
-The API is on http://localhost:8000. Check it with http://localhost:8000/api/health, and browse the
-interactive docs at http://localhost:8000/docs. Migrations run automatically on startup. The
-`worker` service runs ingestion jobs; restart it after changing backend code
-(`docker compose restart worker`), since unlike the API it does not auto-reload.
+Open http://localhost:5173 and enter a GitHub username. The API is on http://localhost:8000
+(check http://localhost:8000/api/health; interactive docs at http://localhost:8000/docs).
+Migrations run automatically on startup. The `worker` service runs ingestion jobs; restart it
+after changing backend code (`docker compose restart worker`), since unlike the API it does not
+auto-reload.
+
+### Frontend only (from `frontend/`)
+
+```bash
+npm install
+npm run dev          # http://localhost:5173 (forwards /api to http://localhost:8000)
+npm run build        # strict type check + production bundle
+```
+
+No backend handy? Open http://localhost:5173/?demo for a city built from a made-up profile
+(`frontend/public/demo-city.json`). Regenerate it after mapping changes with
+`uv run python -m scripts.export_demo_city` from `backend/`.
 
 ### Backend tools (from `backend/`)
 

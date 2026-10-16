@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Codebase Cities</title>
+  </head>
+  <body>
+    <header class="bar">
+      <h1>Codebase Cities</h1>
+      <form id="search" autocomplete="off">
+        <input
+          id="username"
+          name="username"
+          placeholder="GitHub username"
+          maxlength="39"
+          spellcheck="false"
+          required
+        />
+        <button type="submit">Build city</button>
+      </form>
+      <span id="status" role="status" aria-live="polite"></span>
+      <button id="daynight" type="button" title="Switch between day and night">☀️ Day</button>
+    </header>
+
+    <!-- The 3D canvas (and the district labels on top of it) go in here. -->
+    <main id="viewport"></main>
+
+    <div id="info"></div>
+    <div id="tooltip" hidden></div>
+    <p id="hint">Drag to orbit · right-drag to pan · scroll to zoom · hover a building</p>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
