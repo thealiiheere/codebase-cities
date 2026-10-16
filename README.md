@@ -228,20 +228,23 @@ CI builds this exact stack and smoke-tests it through nginx on every push.
 
 ### On Render
 
-[`render.yaml`](render.yaml) is a Render Blueprint that creates everything from this repo:
+[`render.yaml`](render.yaml) is a Render Blueprint that creates everything from this repo, all
+on free plans:
 
-| Service | Render type | Plan in the Blueprint |
+| Service | Render type | Notes |
 | --- | --- | --- |
-| `codebase-cities` (the website) | Static Site | free |
-| `codebase-cities-api` | Web Service (Docker) | free (sleeps when idle) |
-| `codebase-cities-worker` | Background Worker (Docker) | starter (no free plan for workers) |
-| `codebase-cities-db` | Postgres 16 | free (time-limited by Render) |
-| `codebase-cities-redis` | Key Value (Redis-compatible) | free |
+| `codebase-cities` (the website) | Static Site | |
+| `codebase-cities-api` | Web Service (Docker) | Runs the API **and** the worker ([`render-start.sh`](backend/render-start.sh)), since Render has no free background workers. Sleeps after ~15 idle minutes. |
+| `codebase-cities-db` | Postgres 16 | Render removes free databases after a while |
+| `codebase-cities-redis` | Key Value (Redis-compatible) | |
+
+Because the worker shares the API's container, it sleeps with it: the first visit after a quiet
+spell takes about a minute while the service wakes up. For an always-on worker, move it to a
+paid Background Worker (the comment at the top of `render.yaml` says how).
 
 1. Push this repository to GitHub (Render deploys from it).
 2. In the [Render dashboard](https://dashboard.render.com): **New → Blueprint**, connect the
-   repository, and apply `render.yaml`. Paste your `GITHUB_TOKEN` when asked (it goes to the
-   API and the worker).
+   repository, and apply `render.yaml`. Paste your `GITHUB_TOKEN` when asked.
 3. When the deploy finishes, check the API's URL. If it isn't
    `https://codebase-cities-api.onrender.com`, put the real one in the `/api/*` rewrite of the
    website in `render.yaml`, then push.

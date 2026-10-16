@@ -1,9 +1,14 @@
-# Render Blueprint: creates every Codebase Cities service on Render from this repository.
-# In the Render dashboard: New > Blueprint, pick this repo, then fill in GITHUB_TOKEN when asked.
-# Plans and prices change; check render.com/pricing before you apply this.
+# Render Blueprint: creates every Codebase Cities service on Render from this repository, all on
+# free plans. In the Render dashboard: New > Blueprint, pick this repo, then fill in
+# GITHUB_TOKEN when asked. Plans and prices change; check render.com/pricing.
+#
+# To run the worker as its own always-on service instead (a paid Background Worker), add a
+# `type: worker` service with `dockerCommand: arq app.worker.WorkerSettings` and the same
+# environment variables, and change the API's dockerCommand to start only uvicorn.
 
 services:
-  # The API (FastAPI), built from backend/Dockerfile.
+  # The API (FastAPI) and the ARQ worker, together in one container built from
+  # backend/Dockerfile: Render has no free plan for background workers.
   - type: web
     name: codebase-cities-api
     runtime: docker
@@ -12,11 +17,8 @@ services:
     plan: free # Free web services sleep after ~15 idle minutes; the first request wakes them.
     region: frankfurt
     healthCheckPath: /api/health
-    # Migrations run on every start, before the API serves traffic (works on every plan; on a
-    # paid plan you could move them to a preDeployCommand instead).
-    dockerCommand: >-
-      sh -c "alembic upgrade head &&
-      exec uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000 --proxy-headers"
+    # Runs migrations, starts the worker in the background, then the API (see the script).
+    dockerCommand: sh render-start.sh
     envVars:
       - key: PORT # Tells Render which port the API listens on.
         value: "8000"
@@ -38,31 +40,6 @@ services:
       # address for every visitor, change this to "*" in the dashboard.
       - key: FORWARDED_ALLOW_IPS
         value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
-
-  # The ARQ worker that fetches from GitHub and builds cities. Same image, different command.
-  # Render has no free plan for background workers.
-  - type: worker
-    name: codebase-cities-worker
-    runtime: docker
-    dockerContext: ./backend
-    dockerfilePath: ./backend/Dockerfile
-    plan: starter
-    region: frankfurt
-    dockerCommand: arq app.worker.WorkerSettings
-    envVars:
-      - key: ENVIRONMENT
-        value: production
-      - key: GITHUB_TOKEN
-        sync: false
-      - key: DATABASE_URL
-        fromDatabase:
-          name: codebase-cities-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          type: keyvalue
-          name: codebase-cities-redis
-          property: connectionString
 
   # The website. Render builds it and serves the files from its CDN.
   - type: web
