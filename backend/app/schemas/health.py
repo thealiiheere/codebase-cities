@@ -1,0 +1,9 @@
+from typing import Literal
+
+from pydantic import BaseModel
+
+
+class HealthResponse(BaseModel):
+    status: Literal["ok"] = "ok"
+    database: Literal["ok"] = "ok"
+    redis: Literal["ok"] = "ok"

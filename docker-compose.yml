@@ -1,0 +1,55 @@
+# Local development stack. The worker (phase 3) and frontend (phase 6) services are added in
+# their phases: ARQ refuses to start without any job functions registered.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cities}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cities}
+      POSTGRES_DB: ${POSTGRES_DB:-cities}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Inside the compose network, services reach each other by service name, not localhost.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cities}:${POSTGRES_PASSWORD:-cities}@postgres:5432/${POSTGRES_DB:-cities}
+      REDIS_URL: redis://redis:6379/0
+    # Apply migrations, then serve with auto-reload. Uvicorn's default polling reloader works on
+    # Windows bind mounts, where file-change events are unreliable.
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
