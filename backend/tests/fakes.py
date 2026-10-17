@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 
 from app.github.errors import GitHubUserNotFoundError
 from app.github.models import CommitHistory, ContributionDay, RepoInfo, UserProfile
-from app.limiter import RateLimitDecision
+from app.limiter import RateLimitDecision, Requester
 
 T0 = dt.datetime(2026, 10, 16, 12, 0, tzinfo=dt.UTC)
 
@@ -131,7 +131,7 @@ class FakeCityCache:
 
 class FakeRateLimiter:
     """Allows the first `limit` requests (every request if None), then refuses the rest. Records
-    which client made each request. `error` makes every call fail."""
+    who made each request. `error` makes every call fail."""
 
     def __init__(
         self,
@@ -142,12 +142,50 @@ class FakeRateLimiter:
         self.limit = limit
         self.retry_after_seconds = retry_after_seconds
         self.error = error
+        # The bucket each request was counted under (an address, or "user:<id>").
         self.hits: list[str] = []
 
-    async def hit(self, client_ip: str) -> RateLimitDecision:
-        self.hits.append(client_ip)
+    async def hit(self, requester: Requester) -> RateLimitDecision:
+        self.hits.append(requester.bucket)
         if self.error:
             raise self.error
         if self.limit is None or len(self.hits) <= self.limit:
             return RateLimitDecision(allowed=True)
         return RateLimitDecision(allowed=False, retry_after_seconds=self.retry_after_seconds)
+
+
+class FakeSessionStore:
+    """Sessions and sign-ins in dicts. `error` makes every call fail."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.sessions: dict[str, UserProfile] = {}
+        self.sign_ins: dict[str, str] = {}
+
+    def _check(self) -> None:
+        if self.error:
+            raise self.error
+
+    async def create(self, user: UserProfile) -> str:
+        self._check()
+        session_id = f"session-{len(self.sessions) + 1}"
+        self.sessions[session_id] = user
+        return session_id
+
+    async def get(self, session_id: str) -> UserProfile | None:
+        self._check()
+        return self.sessions.get(session_id)
+
+    async def delete(self, session_id: str) -> None:
+        self._check()
+        self.sessions.pop(session_id, None)
+
+    async def begin_sign_in(self, next_path: str) -> str:
+        self._check()
+        state = f"state-{len(self.sign_ins) + 1}"
+        self.sign_ins[state] = next_path
+        return state
+
+    async def finish_sign_in(self, state: str) -> str | None:
+        self._check()
+        return self.sign_ins.pop(state, None)

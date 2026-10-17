@@ -59,6 +59,40 @@ class Settings(BaseSettings):
     rate_limit_new_cities: int = Field(default=10, ge=0)
     rate_limit_window_seconds: int = Field(default=3600, ge=1)
 
+    # New-city requests per signed-in GitHub account per window. Signed-in visitors are counted
+    # by account instead of by address. RATE_LIMIT_NEW_CITIES=0 turns both limits off.
+    rate_limit_new_cities_signed_in: int = Field(default=30, ge=1)
+
+    # Sign in with GitHub (optional): the credentials of a GitHub OAuth App. Without both, the
+    # site works as before and simply offers no sign-in.
+    github_oauth_client_id: str | None = None
+    github_oauth_client_secret: SecretStr | None = None
+    github_oauth_url: str = "https://github.com"
+    # The address visitors use to reach the site. GitHub sends them back to
+    # {public_url}/api/auth/callback, which must be the OAuth App's callback URL.
+    public_url: str = "http://localhost:5173"
+    session_ttl_days: float = Field(default=30, gt=0)
+
+    @field_validator("public_url")
+    @classmethod
+    def strip_trailing_slash(cls, url: str) -> str:
+        return url.rstrip("/")
+
+    @property
+    def auth_enabled(self) -> bool:
+        # Empty values (e.g. a blank line in .env) count as not configured.
+        secret = self.github_oauth_client_secret
+        return bool(self.github_oauth_client_id) and bool(secret and secret.get_secret_value())
+
+    @property
+    def oauth_redirect_uri(self) -> str:
+        return f"{self.public_url}/api/auth/callback"
+
+    @property
+    def secure_cookies(self) -> bool:
+        # Browsers only send Secure cookies over https, so local http development can't use them.
+        return self.public_url.startswith("https://")
+
     # Jobs per worker process. Kept low: GitHub's secondary limits punish bursts of parallel calls.
     worker_max_jobs: int = Field(default=2, ge=1)
     # ARQ cancels a job that runs longer than this.

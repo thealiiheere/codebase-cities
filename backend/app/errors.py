@@ -53,6 +53,12 @@ class CityNotFoundError(NotFoundError):
     code = "city_not_found"
 
 
+class AuthDisabledError(NotFoundError):
+    """Sign-in with GitHub isn't configured on this server."""
+
+    code = "auth_disabled"
+
+
 class GitHubRateLimitedError(ServiceUnavailableError):
     code = "github_rate_limited"
 

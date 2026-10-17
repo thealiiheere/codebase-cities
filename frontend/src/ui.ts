@@ -18,6 +18,7 @@ export interface Ui {
   share: HTMLButtonElement;
   nowPlaying: HTMLElement;
   tooltip: HTMLElement;
+  account: HTMLElement;
 }
 
 function find<T extends HTMLElement>(selector: string): T {
@@ -44,13 +45,13 @@ export function getUi(): Ui {
       slider: find("#timeline-slider"),
       play: find("#timeline-play"),
       start: find("#timeline-start"),
-      year: find("#timeline-year"),
-      spinner: find("#timeline-spinner"),
+      date: find("#timeline-date"),
     },
     cityInfo: find("#city-info"),
     share: find("#share"),
     nowPlaying: find("#now-playing"),
     tooltip: find("#tooltip"),
+    account: find("#account"),
   };
 }
 
@@ -93,7 +94,8 @@ export function setDayNightLabel(ui: Ui, isNight: boolean): void {
   ui.dayNight.textContent = isNight ? "☀️ Day" : "🌙 Night";
 }
 
-export function showTooltip(ui: Ui, building: Building, x: number, y: number): void {
+/** Details of a building; `floors` is how many it has at the date on screen. */
+export function showTooltip(ui: Ui, building: Building, floors: number, x: number, y: number): void {
   // Built from text nodes rather than an HTML string, so names can never inject markup.
   const line = (text: string) => {
     const element = document.createElement("div");
@@ -110,7 +112,11 @@ export function showTooltip(ui: Ui, building: Building, x: number, y: number): v
   ui.tooltip.replaceChildren(
     name,
     language,
-    line(`${plural(building.floors, "floor")} · ${plural(building.commits, "commit")}`),
+    line(
+      floors < building.floors
+        ? `${floors} of ${plural(building.floors, "floor")} so far · ${plural(building.commits, "commit")} today`
+        : `${plural(building.floors, "floor")} · ${plural(building.commits, "commit")}`,
+    ),
     line(`★ ${building.stars.toLocaleString()} · ${plural(building.forks, "fork")}`),
     line(
       building.recent_commits > 0

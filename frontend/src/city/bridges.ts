@@ -11,6 +11,7 @@ export class BridgeLayer implements NightAware {
     roughness: 0.4,
   });
   private readonly geometries: THREE.BufferGeometry[] = [];
+  private readonly arcs: { mesh: THREE.Mesh; ends: [string, string] }[] = [];
 
   constructor(city: CityLayout) {
     const byRepo = new Map(city.buildings.map((building) => [building.repo, building]));
@@ -20,6 +21,16 @@ export class BridgeLayer implements NightAware {
       if (from && to) {
         this.addArc(from, to, bridge.strength);
       }
+    }
+  }
+
+  /**
+   * Arcs run between rooftops at their full height, so on the timeline each one appears once
+   * both of its buildings are finished.
+   */
+  showWhen(isComplete: (repo: string) => boolean): void {
+    for (const { mesh, ends } of this.arcs) {
+      mesh.visible = ends.every(isComplete);
     }
   }
 
@@ -46,6 +57,8 @@ export class BridgeLayer implements NightAware {
     const thickness = 0.1 + strength * 0.25;
     const geometry = new THREE.TubeGeometry(curve, 64, thickness, 8, false);
     this.geometries.push(geometry);
-    this.group.add(new THREE.Mesh(geometry, this.material));
+    const mesh = new THREE.Mesh(geometry, this.material);
+    this.arcs.push({ mesh, ends: [from.repo, to.repo] });
+    this.group.add(mesh);
   }
 }

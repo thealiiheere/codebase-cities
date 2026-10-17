@@ -22,9 +22,27 @@ class RateLimitDecision:
     retry_after_seconds: int = 0
 
 
+@dataclass(frozen=True)
+class Requester:
+    """Who is asking: their address, and their GitHub account id when signed in."""
+
+    ip: str
+    github_id: int | None = None
+
+    @property
+    def signed_in(self) -> bool:
+        return self.github_id is not None
+
+    @property
+    def bucket(self) -> str:
+        """The name this requester's requests are counted under: their account when signed
+        in (wherever they are), otherwise their address."""
+        return f"user:{self.github_id}" if self.signed_in else client_bucket(self.ip)
+
+
 class RateLimiter(Protocol):
-    async def hit(self, client_ip: str) -> RateLimitDecision:
-        """Count one request from this client and say whether it may go ahead."""
+    async def hit(self, requester: Requester) -> RateLimitDecision:
+        """Count one request from this requester and say whether it may go ahead."""
         ...
 
 
@@ -51,13 +69,17 @@ class RedisRateLimiter:
     that a client can fit up to 2 x limit requests around the end of one window and the start
     of the next, which is fine for protecting an hourly quota."""
 
-    def __init__(self, redis: Redis, *, limit: int, window_seconds: int) -> None:
+    def __init__(
+        self, redis: Redis, *, limit: int, signed_in_limit: int, window_seconds: int
+    ) -> None:
         self._redis = redis
         self._limit = limit
+        self._signed_in_limit = signed_in_limit
         self._window = window_seconds
 
-    async def hit(self, client_ip: str) -> RateLimitDecision:
-        key = KEY_PREFIX + client_bucket(client_ip)
+    async def hit(self, requester: Requester) -> RateLimitDecision:
+        key = KEY_PREFIX + requester.bucket
+        limit = self._signed_in_limit if requester.signed_in else self._limit
         # One MULTI/EXEC transaction. SET NX opens a window (and sets its expiry) only when none
         # is open; INCR counts this request and keeps that expiry; TTL says when the window
         # ends. Creating the counter and its expiry together means a crash can never leave a
@@ -69,7 +91,7 @@ class RedisRateLimiter:
             pipe.incr(key)
             pipe.ttl(key)
             _, count, ttl = await pipe.execute()
-        if count <= self._limit:
+        if count <= limit:
             return RateLimitDecision(allowed=True)
         # TTL rounds down (0 in the window's last second); never tell a client to wait 0 seconds.
         return RateLimitDecision(allowed=False, retry_after_seconds=max(int(ttl), 1))
@@ -82,5 +104,6 @@ def create_rate_limiter(redis: Redis, settings: Settings) -> RedisRateLimiter | 
     return RedisRateLimiter(
         redis,
         limit=settings.rate_limit_new_cities,
+        signed_in_limit=settings.rate_limit_new_cities_signed_in,
         window_seconds=settings.rate_limit_window_seconds,
     )

@@ -11,7 +11,11 @@ import { DayNight } from "./lighting";
  * The 3D view: owns the renderer, camera, controls, and lights, and draws one city at a time.
  *
  * Three.js basics: a Scene holds objects; a Camera looks at it; a Renderer draws what the
- * camera sees onto a <canvas>, once per animation frame.
+ * camera sees onto a <canvas>.
+ *
+ * It only draws when something changed (the camera moved, the light is changing, the city or
+ * the timeline changed). A city standing still costs nothing, which keeps laptops cool and the
+ * page responsive.
  */
 export class CityView {
   private readonly renderer: THREE.WebGLRenderer;
@@ -25,12 +29,15 @@ export class CityView {
   private buildings?: BuildingLayer;
   private bridges?: BridgeLayer;
   private lastFrame = 0;
+  private needsRender = true;
+  /** Frames actually drawn, for checking the render-on-demand behavior while developing. */
+  renderCount = 0;
 
   constructor(private readonly container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    // Retina screens report 2-3 device pixels per CSS pixel; more than 2 costs a lot for
-    // little visible gain.
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // High-DPI screens report 1.5-3 device pixels per CSS pixel. Each step up multiplies the
+    // pixels to draw, and above 1.5 the gain is hard to see, so cap it there.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.shadowMap.enabled = true;
     // Percentage-closer filtering smooths shadow edges. (Three.js removed the separate "soft"
     // variant; this is its replacement.)
@@ -52,6 +59,7 @@ export class CityView {
     this.controls.enableDamping = true; // Glide to a stop instead of halting instantly.
     this.controls.maxPolarAngle = Math.PI * 0.47; // Never tilt below the ground.
     this.controls.screenSpacePanning = false; // Pan along the ground, not up into the sky.
+    this.controls.addEventListener("change", () => this.requestRender());
 
     this.dayNight = new DayNight(this.scene);
     new ResizeObserver(() => this.resize()).observe(container);
@@ -59,11 +67,8 @@ export class CityView {
     this.renderer.setAnimationLoop((time) => this.frame(time));
   }
 
-  /**
-   * Replace whatever is shown with this city. A new city also points the camera at it; moving
-   * through the timeline passes keepCamera, so the view stays put while the city changes.
-   */
-  show(city: CityLayout, { keepCamera = false } = {}): void {
+  /** Replace whatever is shown with this city (as it is today), and point the camera at it. */
+  show(city: CityLayout): void {
     this.clear();
     this.ground = new GroundLayer(city);
     this.buildings = new BuildingLayer(city.buildings);
@@ -72,13 +77,35 @@ export class CityView {
 
     const radius = Math.max(city.radius, 40);
     this.dayNight.fitCity(radius, [this.ground, this.buildings, this.bridges]);
-    if (!keepCamera) {
-      this.frameCamera(radius);
-    }
+    this.frameCamera(radius);
+    this.requestRender();
   }
 
-  /** The building under a point on the screen (in CSS pixels), if any. */
-  buildingAt(clientX: number, clientY: number): Building | null {
+  /** Ask for one new frame; the next animation frame draws it. */
+  requestRender(): void {
+    this.needsRender = true;
+  }
+
+  /**
+   * Show the city as it was at the end of `date` (YYYY-MM-DD), or today's city for null:
+   * buildings have the floors they had then, and districts and bridges appear with them.
+   * Returns how many buildings stand at that date.
+   */
+  setTime(date: string | null): number {
+    const buildings = this.buildings;
+    if (buildings === undefined) {
+      return 0;
+    }
+    if (buildings.setTime(date)) {
+      this.ground?.setCounts(buildings.districtCounts());
+      this.bridges?.showWhen((repo) => buildings.isComplete(repo));
+      this.requestRender();
+    }
+    return buildings.standing();
+  }
+
+  /** The building under a point on the screen (in CSS pixels), and its floors at the date shown. */
+  buildingAt(clientX: number, clientY: number): { building: Building; floors: number } | null {
     if (this.buildings === undefined) {
       return null;
     }
@@ -101,6 +128,7 @@ export class CityView {
   /** Switch between day and night. Returns true when it is now (becoming) night. */
   toggleDayNight(): boolean {
     this.dayNight.toggle();
+    this.requestRender();
     return this.dayNight.isNight;
   }
 
@@ -132,9 +160,17 @@ export class CityView {
   private frame(time: number): void {
     const delta = this.lastFrame ? (time - this.lastFrame) / 1000 : 0;
     this.lastFrame = time;
-    this.controls.update(); // Required every frame for damping.
-    this.dayNight.update(delta);
-    this.buildings?.update(time / 1000);
+    // Both are cheap; they ask for a render (via the controls' "change" event, or by returning
+    // true) only while the camera glides or the light is changing.
+    this.controls.update();
+    if (this.dayNight.update(delta)) {
+      this.needsRender = true;
+    }
+    if (!this.needsRender) {
+      return;
+    }
+    this.needsRender = false;
+    this.renderCount++;
     this.renderer.render(this.scene, this.camera);
     this.labelRenderer.render(this.scene, this.camera);
   }
@@ -148,5 +184,6 @@ export class CityView {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
     this.labelRenderer.setSize(width, height);
+    this.requestRender();
   }
 }

@@ -1,59 +1,68 @@
-// Where a user's cities come from: the backend for real users, or bundled files in demo mode.
-// The timeline only talks to a CitySource, so it works the same way in both.
+// Where a city comes from: the backend for real users, or bundled files in demo mode.
+//
+// The city itself never needs fetching again while you move through time (today's city holds
+// every building's history), but the music does: it's composed from the profile as it was at
+// the end of each year. The rest of the page only talks to a CitySource, so the demo and real
+// users work the same way.
 
-import { getCity, loadDemoCity, type CityResponse } from "./api";
+import { getCity, loadDemoCity, type CityResponse, type MusicParams } from "./api";
 
 export interface CitySource {
-  readonly username: string;
-  /** The city at the end of `until` (YYYY-MM-DD), or today's city when `until` is omitted. */
-  city(until?: string): Promise<CityResponse>;
+  /** Today's city (and music). */
+  readonly latest: CityResponse;
+  /** The music for the end of `year`, or today's music when `year` is omitted. */
+  music(year?: number): Promise<MusicParams>;
 }
 
 /**
- * Remembers every city it has fetched, so scrubbing back and forth over the timeline only asks
- * the server once per year. It stores the *promise*, so two quick requests for the same year
- * share one network call; a failed request is forgotten so it can be retried.
+ * Remembers the music of every year it has fetched, so scrubbing back and forth only asks once
+ * per year. It stores the *promise*, so two quick requests for the same year share one network
+ * call; a failed request is forgotten so it can be retried.
  */
 class CachedSource implements CitySource {
-  private readonly cache = new Map<string, Promise<CityResponse>>();
+  private readonly cache = new Map<number, Promise<MusicParams>>();
 
   constructor(
-    readonly username: string,
-    latest: CityResponse,
-    private readonly fetchCity: (until: string) => Promise<CityResponse>,
-  ) {
-    this.cache.set("latest", Promise.resolve(latest));
-  }
+    readonly latest: CityResponse,
+    private readonly fetchMusic: (until: string) => Promise<MusicParams>,
+  ) {}
 
-  city(until?: string): Promise<CityResponse> {
-    const key = until ?? "latest";
-    let pending = this.cache.get(key);
+  music(year?: number): Promise<MusicParams> {
+    if (year === undefined) {
+      return Promise.resolve(this.latest.music);
+    }
+    let pending = this.cache.get(year);
     if (pending === undefined) {
-      pending = this.fetchCity(key);
-      pending.catch(() => this.cache.delete(key));
-      this.cache.set(key, pending);
+      pending = this.fetchMusic(`${year}-12-31`);
+      pending.catch(() => this.cache.delete(year));
+      this.cache.set(year, pending);
     }
     return pending;
   }
 }
 
-/** Cities for a real user, starting from the latest city we already have. */
+/** A real user's city. A past year's music comes from that year's city on the server. */
 export function apiSource(latest: CityResponse): CitySource {
-  return new CachedSource(latest.username, latest, (until) => getCity(latest.username, until));
+  return new CachedSource(latest, async (until) => (await getCity(latest.username, until)).music);
 }
 
-/** The demo profile: today's city plus a bundled file with the city at the end of each year. */
-export async function demoSource(): Promise<{ source: CitySource; latest: CityResponse }> {
-  const [latest, timeline] = await Promise.all([
-    loadDemoCity(),
-    fetch("/demo-timeline.json").then((response) => response.json() as Promise<Record<string, CityResponse>>),
-  ]);
-  const source = new CachedSource(latest.username, latest, async (until) => {
-    const city = timeline[until];
-    if (city === undefined) {
-      throw new Error(`The demo has no city for ${until}.`);
+/** The demo profile: today's city, plus a bundled file with the music at the end of each year. */
+export async function demoSource(): Promise<CitySource> {
+  const latest = await loadDemoCity();
+  // Only downloaded once someone plays the music of a past year.
+  let years: Promise<Record<string, MusicParams>> | null = null;
+  return new CachedSource(latest, async (until) => {
+    years ??= fetch("/demo-music.json").then((response) => {
+      if (!response.ok) {
+        years = null; // Let the next request try again.
+        throw new Error("Couldn't load the demo's music.");
+      }
+      return response.json() as Promise<Record<string, MusicParams>>;
+    });
+    const music = (await years)[until];
+    if (music === undefined) {
+      throw new Error(`The demo has no music for ${until}.`);
     }
-    return city;
+    return music;
   });
-  return { source, latest };
 }

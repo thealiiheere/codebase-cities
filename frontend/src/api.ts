@@ -14,6 +14,13 @@ export interface Building {
   floors: number;
   /** Always floors * floor height. */
   height: number;
+  /**
+   * The timeline, as [YYYY-MM-DD, value] pairs, oldest first: `growth` is the building's floors
+   * from each date on (the first entry is the day the repo was created), `lights` its
+   * window_brightness from each date on.
+   */
+  growth: [string, number][];
+  lights: [string, number][];
   color: string;
   /** 0..1: the share of floors with lit windows at night. */
   window_brightness: number;
@@ -143,6 +150,34 @@ export async function getJob(id: string): Promise<Job> {
 export async function getCity(username: string, until?: string): Promise<CityResponse> {
   const query = until ? `?until=${encodeURIComponent(until)}` : "";
   return (await request<CityResponse>("GET", cityPath(username) + query)).body;
+}
+
+// --- Signing in with GitHub ---
+
+export interface AuthUser {
+  login: string;
+  name: string | null;
+  avatar_url: string;
+}
+
+export interface AuthStatus {
+  /** False when the server has no GitHub OAuth App set up: offer no sign-in. */
+  enabled: boolean;
+  user: AuthUser | null;
+}
+
+/** Whether sign-in is available, and who is signed in (the browser sends the session cookie). */
+export async function getAuthStatus(): Promise<AuthStatus> {
+  return (await request<AuthStatus>("GET", "/api/auth/me")).body;
+}
+
+export async function signOut(): Promise<void> {
+  await request<null>("POST", "/api/auth/logout");
+}
+
+/** The address that starts signing in. Afterwards the visitor comes back to `returnTo`. */
+export function signInUrl(returnTo: string): string {
+  return `/api/auth/login?next=${encodeURIComponent(returnTo)}`;
 }
 
 /** A city built from a made-up profile, so the frontend works without a backend. */

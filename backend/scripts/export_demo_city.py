@@ -1,9 +1,9 @@
-"""Regenerate the frontend's demo data: a city (and its timeline) from a made-up profile.
+"""Regenerate the frontend's demo data: a city (and its music over time) from a made-up profile.
 
-Writes frontend/public/demo-city.json (today's city) and demo-timeline.json (the city at the
-end of every earlier year). The frontend's demo mode (/?demo) loads them, so the 3D city, the
-music, and the year slider all work without a running backend. Run from backend/ whenever
-the mapping engine changes:
+Writes frontend/public/demo-city.json (today's city, which holds every building's growth over
+time) and demo-music.json (the music at the end of every earlier year). The frontend's demo mode
+(/?demo) loads them, so the 3D city, the music, and the timeline all work without a running
+backend. Run from backend/ whenever the mapping engine changes:
 
     uv run python -m scripts.export_demo_city
 """
@@ -110,19 +110,19 @@ def main() -> None:
         f"{len(city.bridges)} bridges, {sum(b.floors for b in city.buildings)} floors"
     )
 
-    # Same keys the frontend asks the API for: the last day of each year before this one.
+    # Keyed like the frontend's requests to the API: the last day of each year before this one.
     years = range(profile.created_at.year, FETCHED_AT.year)
-    timeline = {
-        f"{year}-12-31": build_payload(profile, FETCHED_AT, dt.date(year, 12, 31)).model_dump(
+    music = {
+        f"{year}-12-31": build_payload(profile, FETCHED_AT, dt.date(year, 12, 31)).music.model_dump(
             mode="json"
         )
         for year in years
     }
-    (PUBLIC / "demo-timeline.json").write_text(
-        json.dumps(timeline, separators=(",", ":")), encoding="utf-8"
+    (PUBLIC / "demo-music.json").write_text(
+        json.dumps(music, separators=(",", ":")), encoding="utf-8"
     )
-    counts = ", ".join(f"{date[:4]}: {len(c['city']['buildings'])}" for date, c in timeline.items())
-    print(f"demo-timeline.json: buildings per year - {counts}")
+    tracks = ", ".join(f"{date[:4]}: {len(m['tracks'])}" for date, m in music.items())
+    print(f"demo-music.json: tracks per year - {tracks}")
 
 
 if __name__ == "__main__":

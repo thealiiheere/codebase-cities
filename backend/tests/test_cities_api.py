@@ -16,15 +16,24 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api.deps import get_city_cache, get_github, get_queue, get_rate_limiter, get_session
+from app.api.deps import (
+    get_city_cache,
+    get_github,
+    get_queue,
+    get_rate_limiter,
+    get_session,
+    get_session_store,
+)
 from app.github.errors import RateLimitExceededError
 from app.models import GithubUser, Job, JobStatus
 from app.services.ingestion import run_ingestion_job
+from app.sessions import SESSION_COOKIE
 from tests.fakes import (
     FakeCityCache,
     FakeGitHub,
     FakeQueue,
     FakeRateLimiter,
+    FakeSessionStore,
     make_profile,
     make_repo,
 )
@@ -55,6 +64,11 @@ def fake_limiter() -> FakeRateLimiter:
 
 
 @pytest.fixture
+def fake_sessions() -> FakeSessionStore:
+    return FakeSessionStore()
+
+
+@pytest.fixture
 def api(
     app: FastAPI,
     session_factory: async_sessionmaker[AsyncSession],
@@ -62,6 +76,7 @@ def api(
     fake_queue: FakeQueue,
     fake_cache: FakeCityCache,
     fake_limiter: FakeRateLimiter,
+    fake_sessions: FakeSessionStore,
 ) -> FastAPI:
     async def real_session() -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
@@ -72,6 +87,7 @@ def api(
     app.dependency_overrides[get_queue] = lambda: fake_queue
     app.dependency_overrides[get_city_cache] = lambda: fake_cache
     app.dependency_overrides[get_rate_limiter] = lambda: fake_limiter
+    app.dependency_overrides[get_session_store] = lambda: fake_sessions
     return app
 
 
@@ -273,6 +289,22 @@ async def test_requests_past_the_limit_are_429_with_retry_after(
     assert fake_github.calls == ["lookup_user"]  # Only for ghost; octocat never reached GitHub.
     assert fake_queue.enqueued == []
     assert await jobs_in_db(session) == []
+
+
+@pytest.mark.integration
+async def test_signed_in_visitors_are_counted_by_account(
+    api: FastAPI,
+    client: httpx.AsyncClient,
+    fake_limiter: FakeRateLimiter,
+    fake_sessions: FakeSessionStore,
+) -> None:
+    session_id = await fake_sessions.create(make_profile("hubot", github_id=7))
+    client.cookies.set(SESSION_COOKIE, session_id)
+
+    response = await client.post("/api/cities/octocat")
+
+    assert response.status_code == 202
+    assert fake_limiter.hits == ["user:7"]
 
 
 @pytest.mark.integration
@@ -489,6 +521,7 @@ def offline_api(app: FastAPI) -> FastAPI:
     app.dependency_overrides[get_queue] = lambda: FakeQueue()
     app.dependency_overrides[get_city_cache] = lambda: FakeCityCache()
     app.dependency_overrides[get_rate_limiter] = lambda: None
+    app.dependency_overrides[get_session_store] = lambda: FakeSessionStore()
     return app
 
 

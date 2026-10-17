@@ -42,6 +42,15 @@ export class MusicPlayer {
   private retiring: Band[] = [];
   private volume = 0.7;
 
+  /**
+   * `audioContext` must have been created inside the click that asked for music: browsers only
+   * let a page start audio in direct response to the user, and this module is downloaded after
+   * that click (see main.ts).
+   */
+  constructor(audioContext: AudioContext) {
+    Tone.setContext(audioContext);
+  }
+
   get hasMusic(): boolean {
     return (this.music?.tracks.length ?? 0) > 0;
   }

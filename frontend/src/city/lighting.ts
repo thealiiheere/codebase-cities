@@ -46,7 +46,8 @@ export class DayNight {
     scene.background = NIGHT.sky.clone();
 
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
+    // 1024 texels are plenty for a city seen from above, at a quarter of 2048's cost.
+    this.sun.shadow.mapSize.set(1024, 1024);
     this.sun.shadow.bias = -0.0005;
     scene.add(this.hemisphere, this.sun, this.sun.target);
   }
@@ -77,10 +78,13 @@ export class DayNight {
     this.target = this.target === 1 ? 0 : 1;
   }
 
-  /** Move a little toward the target look. Call once per frame with the elapsed seconds. */
-  update(deltaSeconds: number): void {
+  /**
+   * Move a little toward the target look. Call once per frame with the elapsed seconds.
+   * Returns true while the look is changing (so the view knows to draw a new frame).
+   */
+  update(deltaSeconds: number): boolean {
     if (this.night === this.target) {
-      return;
+      return false;
     }
     const step = deltaSeconds / TRANSITION_SECONDS;
     this.night =
@@ -88,6 +92,7 @@ export class DayNight {
         ? Math.min(this.target, this.night + step)
         : Math.max(this.target, this.night - step);
     this.apply();
+    return true;
   }
 
   private apply(): void {

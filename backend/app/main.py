@@ -14,8 +14,10 @@ from app.config import Settings, get_settings
 from app.db import create_engine, create_session_factory
 from app.errors import register_error_handlers
 from app.github.client import create_github_client
+from app.github.oauth import GitHubOAuth
 from app.limiter import create_rate_limiter
 from app.queue import create_job_queue
+from app.sessions import create_session_store
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -33,15 +35,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         github = (
             create_github_client(resolved, RedisEtagStore(redis)) if resolved.github_token else None
         )
+        # Without OAuth App credentials there is no sign-in; everything else works the same.
+        oauth = GitHubOAuth.from_settings(resolved) if resolved.auth_enabled else None
         app.state.session_factory = create_session_factory(engine)
         app.state.redis = redis
         app.state.city_cache = create_city_cache(redis, resolved)
         app.state.rate_limiter = create_rate_limiter(redis, resolved)
         app.state.queue = queue
         app.state.github = github
+        app.state.oauth = oauth
+        app.state.sessions = create_session_store(redis, resolved)
         try:
             yield
         finally:
+            if oauth is not None:
+                await oauth.aclose()
             if github is not None:
                 await github.aclose()
             await queue.aclose()

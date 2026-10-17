@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings
 from app.errors import GitHubUnavailableError, QueueUnavailableError, RateLimitedError
 from app.ingestion.fetch import GitHubSource
-from app.limiter import RateLimiter
+from app.limiter import RateLimiter, Requester
 from app.models import GithubUser, Job
 from app.queue import JobQueue
 from app.services import jobs
@@ -44,7 +44,7 @@ async def request_city(
     queue: JobQueue,
     settings: Settings,
     limiter: RateLimiter | None,
-    client_ip: str,
+    requester: Requester,
     now: dt.datetime | None = None,
 ) -> CityReady | CityQueued:
     now = now or dt.datetime.now(dt.UTC)
@@ -68,7 +68,7 @@ async def request_city(
         raise GitHubUnavailableError("This server has no GitHub token configured.")
     # Everything from here on spends GitHub quota (the lookup, then the ingestion job), so it
     # counts against the client's limit. Fresh cities and running jobs above never do.
-    await check_rate_limit(limiter, client_ip)
+    await check_rate_limit(limiter, requester)
     with github_errors_as_app_errors(now):
         await github.lookup_user(username)
 
@@ -78,12 +78,12 @@ async def request_city(
     return CityQueued(job=job)
 
 
-async def check_rate_limit(limiter: RateLimiter | None, client_ip: str) -> None:
-    """Raise RateLimitedError if this client has asked GitHub for too much lately."""
+async def check_rate_limit(limiter: RateLimiter | None, requester: Requester) -> None:
+    """Raise RateLimitedError if this requester has asked GitHub for too much lately."""
     if limiter is None:
         return
     try:
-        decision = await limiter.hit(client_ip)
+        decision = await limiter.hit(requester)
     except Exception:
         # Fail open: a Redis outage shouldn't stop people getting cities. The GitHub client's
         # own rate limit handling still keeps the token from being run dry in the meantime.
@@ -91,8 +91,9 @@ async def check_rate_limit(limiter: RateLimiter | None, client_ip: str) -> None:
         return
     if not decision.allowed:
         seconds = decision.retry_after_seconds
+        source = "account" if requester.signed_in else "address"
         raise RateLimitedError(
-            "Too many new cities requested from your address. "
+            f"Too many new cities requested from your {source}. "
             f"Please try again in {_minutes(seconds)}.",
             headers={"Retry-After": str(seconds)},
         )

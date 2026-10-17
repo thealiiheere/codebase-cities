@@ -9,9 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.cache import CityCache
 from app.config import Settings
+from app.github.models import UserProfile
+from app.github.oauth import GitHubOAuth
 from app.ingestion.fetch import GitHubSource
-from app.limiter import RateLimiter
+from app.limiter import RateLimiter, Requester
 from app.queue import JobQueue
+from app.services.auth import current_user
+from app.sessions import SESSION_COOKIE, SessionStore
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
@@ -52,6 +56,29 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def get_oauth(request: Request) -> GitHubOAuth | None:
+    # None when sign-in isn't configured (no GITHUB_OAUTH_CLIENT_ID / _SECRET).
+    return cast(GitHubOAuth | None, request.app.state.oauth)
+
+
+def get_session_store(request: Request) -> SessionStore:
+    return cast(SessionStore, request.app.state.sessions)
+
+
+async def get_current_user(
+    request: Request, sessions: Annotated[SessionStore, Depends(get_session_store)]
+) -> UserProfile | None:
+    """The signed-in visitor, from their session cookie, or None."""
+    return await current_user(sessions, request.cookies.get(SESSION_COOKIE))
+
+
+def get_requester(
+    client_ip: Annotated[str, Depends(get_client_ip)],
+    user: Annotated[UserProfile | None, Depends(get_current_user)],
+) -> Requester:
+    return Requester(ip=client_ip, github_id=user.github_id if user else None)
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 RedisDep = Annotated[Redis, Depends(get_redis)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -60,3 +87,7 @@ QueueDep = Annotated[JobQueue, Depends(get_queue)]
 CityCacheDep = Annotated[CityCache, Depends(get_city_cache)]
 RateLimiterDep = Annotated[RateLimiter | None, Depends(get_rate_limiter)]
 ClientIpDep = Annotated[str, Depends(get_client_ip)]
+OAuthDep = Annotated[GitHubOAuth | None, Depends(get_oauth)]
+SessionStoreDep = Annotated[SessionStore, Depends(get_session_store)]
+CurrentUserDep = Annotated[UserProfile | None, Depends(get_current_user)]
+RequesterDep = Annotated[Requester, Depends(get_requester)]

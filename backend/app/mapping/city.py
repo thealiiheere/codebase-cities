@@ -13,6 +13,15 @@ from dataclasses import dataclass
 from pydantic import BaseModel, ConfigDict
 
 from app.mapping.activity import window_total
+from app.mapping.growth import (
+    FLOOR_HEIGHT,
+    MAX_FLOORS,
+    RECENT_DAYS,
+    brightness_for,
+    floor_steps,
+    floors_for,
+    light_steps,
+)
 from app.mapping.inputs import RepoData, UserData
 from app.mapping.packing import Rect, place_around
 from app.mapping.palette import OTHER, language_color
@@ -29,17 +38,10 @@ LOT_MARGIN = 2.0  # Space around a building inside its lot.
 BLOCK_LOTS = 3  # A block is BLOCK_LOTS x BLOCK_LOTS lots.
 
 # --- Buildings ---------------------------------------------------------------------------------
-# Buildings are stacks of floors. Floors grow with commits on a log curve: 1 commit is a single
-# floor, ~100 commits about 16, and 20,000 or more the full 33. (One floor per commit would turn
-# a 20,000-commit repo into a 20,000-floor tower next to sheds.)
-FLOOR_HEIGHT = 3.0
-MAX_FLOORS = 33
-COMMITS_FOR_MAX_FLOORS = 20_000
+# Floors and lit windows follow the rules in growth.py.
 MIN_HEIGHT, MAX_HEIGHT = FLOOR_HEIGHT, MAX_FLOORS * FLOOR_HEIGHT
 MIN_FOOTPRINT, MAX_FOOTPRINT = 4.0, 16.0
 SIZE_KB_FOR_MAX_FOOTPRINT = 500_000
-RECENT_DAYS = 90
-RECENT_COMMITS_FOR_FULL_LIGHT = 60
 MAX_ROOF_LIGHTS = 8
 STYLE_COUNT = 4  # Visual variants the frontend can draw.
 
@@ -77,6 +79,10 @@ class Building(_Frozen):
     # Stories, growing with commits; height is always floors * FLOOR_HEIGHT.
     floors: int
     height: float
+    # The timeline: (date, floors) each time it gained floors, and (date, window_brightness)
+    # at the end of each month where that changed. See growth.py.
+    growth: tuple[tuple[dt.date, int], ...]
+    lights: tuple[tuple[dt.date, float], ...]
     color: str
     # 0 (dark) to 1 (every window lit), from commits in the last 90 days.
     window_brightness: float
@@ -242,7 +248,7 @@ def _building(
     # A stream per repo (by GitHub's id, which survives renames), so adding a repo never
     # changes another building's style.
     style = SeededRng(username, f"building-style:{repo.github_id}").below(STYLE_COUNT)
-    floors = _floors(repo.total_commits)
+    floors = floors_for(repo.total_commits)
     return Building(
         repo=repo.name,
         district=district,
@@ -251,8 +257,10 @@ def _building(
         size=_footprint(repo),
         floors=floors,
         height=rounded(floors * FLOOR_HEIGHT),
+        growth=floor_steps(repo, as_of=as_of),
+        lights=light_steps(repo, as_of=as_of),
         color=language_color(district),
-        window_brightness=rounded(log_scale(recent, saturation=RECENT_COMMITS_FOR_FULL_LIGHT)),
+        window_brightness=rounded(brightness_for(recent)),
         # 1 star: 1 light, 3: 2, 7: 3, ... 255 or more: 8.
         roof_lights=min(MAX_ROOF_LIGHTS, int(math.log2(repo.stars + 1))),
         style=style,
@@ -261,14 +269,6 @@ def _building(
         commits=repo.total_commits,
         recent_commits=recent,
     )
-
-
-def _floors(commits: int) -> int:
-    """1 floor for 0 or 1 commits, rising on a log curve to MAX_FLOORS."""
-    extra = log_scale(
-        max(commits - 1, 0), saturation=COMMITS_FOR_MAX_FLOORS - 1, low=0, high=MAX_FLOORS - 1
-    )
-    return 1 + round(extra)
 
 
 def _bridges(districts: Sequence[District], buildings: Sequence[Building]) -> list[Bridge]:

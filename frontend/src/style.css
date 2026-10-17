@@ -44,8 +44,10 @@ body {
 .bar {
   align-self: stretch;
   display: flex;
+  /* Controls move onto a second row when they don't fit, instead of running off screen. */
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
+  gap: 8px 16px;
   padding: 10px 16px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
@@ -97,6 +99,26 @@ button:hover:not(:disabled) {
 button:disabled {
   opacity: 0.6;
   cursor: progress;
+}
+
+/* Sign in, or "My city" and Sign out: pushed to the right end of the bar. */
+.account {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.account[hidden] {
+  display: none;
+}
+
+.avatar {
+  width: 22px;
+  height: 22px;
+  margin: -3px 8px -3px -4px;
+  border-radius: 50%;
+  vertical-align: middle;
 }
 
 /* Progress and error messages: a pill just under the top bar, so it always has room. */
@@ -294,7 +316,9 @@ button:disabled {
 }
 
 .year {
-  min-width: 3em;
+  /* A fixed width: month names differ in width, and a changing label would make the slider
+     jitter while the timeline plays. */
+  width: 5.5em;
   text-align: right;
   font-weight: 600;
   font-variant-numeric: tabular-nums;

@@ -4,8 +4,12 @@
 
 Enter a username and every public repository becomes a building: floors are commits,
 districts are languages, lit windows show recent work, and bridges link the most-forked
-repos. The same data becomes music, one instrument per language. Drag the year slider to
-watch the city grow from the first commit to today while the music evolves with it.
+repos. The same data becomes music, one instrument per language. Press play on the timeline
+to watch the city grow from the first commit to today: buildings rise floor by floor as their
+commits land, windows light up and go dark with each repo's activity, and the music evolves
+year by year.
+
+Search for anyone's city, or sign in with GitHub to jump straight to your own.
 
 The same profile always produces the same city and the same tune: everything is derived
 deterministically from the data.
@@ -33,7 +37,10 @@ deterministically from the data.
 | Username | Building styles | Key and scale |
 
 Bigger districts sit closer to the central plaza. On the timeline every building keeps its
-plot: a repo appears the year it was created and gains floors as its commits accumulate.
+plot: a repo appears the day it was created and gains floors as its commits land, on the same
+curve as today's height (so a busy repo still tops out at 33 floors). Each building carries its
+own history (`growth` and `lights` in the API), so the timeline plays smoothly in the browser
+without asking the server for every day.
 
 ## Try it
 
@@ -48,7 +55,8 @@ docker compose up --build
 ```
 
 Open http://localhost:5173 and enter a GitHub username. Share links look like
-`/city/octocat`, or `/city/octocat?year=2015` for a point on the timeline.
+`/city/octocat`, or `/city/octocat?year=2015` for a point on the timeline. To offer
+**Sign in with GitHub**, see [below](#sign-in-with-github-optional).
 
 ## Architecture
 
@@ -104,7 +112,8 @@ sequenceDiagram
         B->>A: GET /api/cities/octocat
         A-->>B: the city and music (from the cache)
     end
-    B->>A: GET /api/cities/octocat?until=2019-12-31 (year slider)
+    Note over B: the timeline replays each building's growth locally
+    B->>A: GET /api/cities/octocat?until=2019-12-31 (that year's music, while it plays)
 ```
 
 ### Backend (`backend/`, Python 3.12)
@@ -112,8 +121,9 @@ sequenceDiagram
 | Package | What it does |
 | --- | --- |
 | `app/api/` | FastAPI routers, kept thin: they validate input and call services |
-| `app/services/` | Orchestration: requesting cities, job bookkeeping, the ingestion job, serving and caching cities |
-| `app/github/` | Async GitHub client: GraphQL for data (commit history batched 10 repos per query), REST with ETags for profiles, rate limit handling, retries |
+| `app/services/` | Orchestration: requesting cities, job bookkeeping, the ingestion job, serving and caching cities, signing in |
+| `app/github/` | Async GitHub client: GraphQL for data (commit history batched 10 repos per query), REST with ETags for profiles, rate limit handling, retries; the OAuth sign-in flow |
+| `app/sessions.py`, `app/limiter.py` | Redis-backed sign-in sessions, and the per-visitor rate limit |
 | `app/ingestion/` | Fetch → normalize (pure) → store (one transaction) |
 | `app/mapping/` | **Pure functions**: data → city layout and music. No I/O, no clock, no global randomness; seeded per username. |
 | `app/models/`, `migrations/` | SQLAlchemy 2.0 async models and Alembic migrations |
@@ -133,10 +143,11 @@ responses are cached with ETags (unchanged ones cost no rate limit).
 | File | What it does |
 | --- | --- |
 | `src/main.ts` | Wires the page: routes, loading, timeline, music, hover |
+| `src/account.ts` | Sign in with GitHub, "My city", sign out |
 | `src/api.ts` | Typed client mirroring the backend's response models; job polling |
-| `src/city/` | Three.js: floors drawn as instanced meshes (one draw call for every floor), ground and districts, bridges, day/night lighting |
-| `src/sound/` | Tone.js: synthesized instruments and the player (switches music on bar lines) |
-| `src/timeline.ts`, `src/sources.ts` | Year slider and fly-through; cached per-year cities from the API or the demo files |
+| `src/city/` | Three.js: floors drawn as instanced meshes (one draw call for every floor, shown or hidden as the timeline moves), ground and districts, bridges, day/night lighting. Draws only when something changes. |
+| `src/sound/` | Tone.js: synthesized instruments and the player (switches music on bar lines). Downloaded the first time you press Play. |
+| `src/timeline.ts`, `src/sources.ts` | The timeline slider and playback; per-year music from the API or the demo files |
 | `src/router.ts` | Share links (`/city/{username}?year=`) and browser history |
 
 ## Development
@@ -168,7 +179,7 @@ Tests never call GitHub. To check the client against the real API with your toke
 uv run python -m scripts.github_smoke octocat
 ```
 
-After changing the mapping engine, regenerate the demo city and its timeline:
+After changing the mapping engine, regenerate the demo city and its music per year:
 
 ```bash
 uv run python -m scripts.export_demo_city
@@ -192,6 +203,10 @@ If a Postgres already runs on your machine's port 5432, set `POSTGRES_HOST_PORT=
 | `POST /api/cities/{username}` | `200` + the city when stored data is fresh; `202` + a job (and `Location` header) when it must be fetched; `404` for unknown users; `429` (code `rate_limited`, with `Retry-After`) when this client has asked for too many new cities; `503` when GitHub is rate limited (with `Retry-After`) |
 | `GET /api/cities/{username}?until=YYYY-MM-DD` | The city layout and music, optionally as of the end of a past day; `404` until the city has been built once |
 | `GET /api/jobs/{job_id}` | The job: `queued`, `fetching`, `building`, `done`, or `failed` (with a readable `error`) |
+| `GET /api/auth/login?next=/path` | Redirects to GitHub to sign in, then back to `next` (your own city by default); `404` when sign-in isn't set up |
+| `GET /api/auth/callback` | Where GitHub sends visitors back; sets the session cookie. A failed sign-in returns to `/?auth_error=...` |
+| `GET /api/auth/me` | `{"enabled": ..., "user": {"login", "name", "avatar_url"} or null}` |
+| `POST /api/auth/logout` | Ends the session (`204`) |
 | `GET /api/health` | `200` when Postgres and Redis respond, else `503` |
 
 Errors always look like `{"error": {"code": "...", "message": "..."}}`. Interactive docs are
@@ -201,8 +216,29 @@ at `/docs` on the API.
 an hour that reach GitHub: new cities, refreshes of outdated ones, and lookups of unknown users.
 Serving a fresh city, joining a job that is already running, polling a job, and reading a city
 (including the timeline) are never counted. Counts live in Redis, so they hold across API
-processes; if Redis is down, requests are let through and a warning is logged. Set
-`RATE_LIMIT_NEW_CITIES` and `RATE_LIMIT_WINDOW_SECONDS` in `.env` (0 turns the limit off).
+processes; if Redis is down, requests are let through and a warning is logged. Signed-in
+visitors are counted per GitHub account instead, with a higher limit (30 an hour). Set
+`RATE_LIMIT_NEW_CITIES`, `RATE_LIMIT_NEW_CITIES_SIGNED_IN`, and `RATE_LIMIT_WINDOW_SECONDS` in
+`.env` (`RATE_LIMIT_NEW_CITIES=0` turns both limits off).
+
+## Sign in with GitHub (optional)
+
+Signing in adds a **My city** shortcut and the higher rate limit; every city stays public and
+searchable without it. Cities are always built with the server's own `GITHUB_TOKEN`: the
+visitor's GitHub token is used once to learn who they are, then dropped. It's never stored, and
+no scopes are requested. The session is a random id in an HttpOnly, SameSite=Lax cookie (Secure
+on https), with only a hash of it kept in Redis.
+
+1. On GitHub: **Settings → Developer settings → OAuth Apps → New OAuth App**
+   (https://github.com/settings/developers).
+   - Homepage URL: where the site runs, e.g. `http://localhost:5173` or
+     `https://codebase-cities.onrender.com`.
+   - Authorization callback URL: the same address + `/api/auth/callback`.
+   An OAuth App has one callback URL, so use separate apps for development and production.
+2. Generate a client secret, then set `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, and
+   `PUBLIC_URL` (the same address as the Homepage URL) in `.env`, or on Render in the API
+   service's **Environment** tab.
+3. Restart the API. A **Sign in with GitHub** button appears at the right of the top bar.
 
 ## Deployment
 
@@ -247,7 +283,9 @@ paid Background Worker (the comment at the top of `render.yaml` says how).
    repository, and apply `render.yaml`. Paste your `GITHUB_TOKEN` when asked.
 3. When the deploy finishes, check the API's URL. If it isn't
    `https://codebase-cities-api.onrender.com`, put the real one in the `/api/*` rewrite of the
-   website in `render.yaml`, then push.
+   website in `render.yaml`, then push. Likewise, `PUBLIC_URL` must be the website's address.
+   To offer sign-in, set up an OAuth App as described in
+   [Sign in with GitHub](#sign-in-with-github-optional).
 4. Open the website's URL and build a city. Then look at the API's logs: each request shows the
    visitor's address. If every request shows the same address, set `FORWARDED_ALLOW_IPS` to
    `*` on the API service, or the rate limit would count all visitors as one.
@@ -262,11 +300,12 @@ real data, upgrade the free Postgres, because Render removes free databases afte
   timeline keeps today's values for those and only replays repos and commits. Commit history is
   capped per repo (newest 5,000 by default); older totals are exact, their dates are not.
 - **Public data only.** Private repos never appear, even when the token can see them.
-- **The rate limit is per IP address.** It stops one visitor from spending your token's quota,
-  but not many addresses working together, and visitors who share an address (an office
-  network, say) share one limit. It's a fixed window, so a client can fit up to twice the
+- **The rate limit is per IP address** (per account for signed-in visitors). It stops one
+  visitor from spending your token's quota, but not many addresses working together, and
+  visitors who share an address (an office network, say) share one limit. It's a fixed window, so a client can fit up to twice the
   limit around the moment one window ends and the next begins. The API finds the visitor's
   address in `X-Forwarded-For`, trusting only proxies on private networks (see
   `docker-compose.prod.yml`). Behind a proxy on a public address, such as a CDN, add its
   ranges there, or every visitor will count as that proxy.
-- **Bundle size.** Three.js and Tone.js make the frontend about 220 KB gzipped.
+- **Bundle size.** Three.js makes the page about 155 KB gzipped; Tone.js (about 70 KB more)
+  only downloads when someone presses Play.

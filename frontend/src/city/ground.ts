@@ -6,6 +6,13 @@ import type { NightAware } from "./lighting";
 const ASPHALT = "#22272e";
 const PLOT_BLEND = new THREE.Color("#1b1f24");
 
+/** The objects that make up one district on the ground. */
+interface DistrictParts {
+  language: string;
+  objects: THREE.Object3D[];
+  label: HTMLElement;
+}
+
 /** The ground: asphalt everywhere, the plaza in the middle, and a tinted plot per district. */
 export class GroundLayer implements NightAware {
   readonly group = new THREE.Group();
@@ -13,6 +20,7 @@ export class GroundLayer implements NightAware {
   private readonly labels: CSS2DObject[] = [];
   private readonly plazaGlow: THREE.MeshStandardMaterial;
   private readonly borders: THREE.LineBasicMaterial[] = [];
+  private readonly districts: DistrictParts[] = [];
 
   constructor(city: CityLayout) {
     // Far bigger than the city, so its edge always lies beyond the fog and never shows.
@@ -50,6 +58,19 @@ export class GroundLayer implements NightAware {
     this.plazaGlow.emissiveIntensity = THREE.MathUtils.lerp(0.1, 1.4, amount);
     for (const border of this.borders) {
       border.opacity = THREE.MathUtils.lerp(0.35, 0.9, amount);
+    }
+  }
+
+  /**
+   * Show each district with its number of standing buildings, hiding districts with none: on
+   * the timeline, a district appears with its first building.
+   */
+  setCounts(counts: Map<string, number>): void {
+    for (const { language, objects, label } of this.districts) {
+      const count = counts.get(language) ?? 0;
+      // An invisible label is hidden on the page too (CSS2DRenderer sets display: none).
+      for (const object of objects) object.visible = count > 0;
+      label.textContent = `${language} · ${count}`;
     }
   }
 
@@ -100,6 +121,7 @@ export class GroundLayer implements NightAware {
     this.labels.push(label);
 
     this.group.add(plot, outline, label);
+    this.districts.push({ language: district.language, objects: [plot, outline, label], label: element });
   }
 
   private track<T extends { dispose(): void }>(item: T): T {

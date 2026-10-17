@@ -6,7 +6,15 @@ from app.config import Settings
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("GITHUB_TOKEN", "MAX_REPOS_PER_USER", "DATABASE_URL", "REDIS_URL"):
+    for name in (
+        "GITHUB_TOKEN",
+        "MAX_REPOS_PER_USER",
+        "DATABASE_URL",
+        "REDIS_URL",
+        "GITHUB_OAUTH_CLIENT_ID",
+        "GITHUB_OAUTH_CLIENT_SECRET",
+        "PUBLIC_URL",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -55,3 +63,35 @@ def test_rejects_out_of_range_repo_cap(monkeypatch: pytest.MonkeyPatch, value: s
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def test_sign_in_needs_both_oauth_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert not Settings(_env_file=None).auth_enabled
+
+    monkeypatch.setenv("GITHUB_OAUTH_CLIENT_ID", "client-id")
+    assert not Settings(_env_file=None).auth_enabled
+
+    monkeypatch.setenv("GITHUB_OAUTH_CLIENT_SECRET", "")  # Blank counts as unset.
+    assert not Settings(_env_file=None).auth_enabled
+
+    monkeypatch.setenv("GITHUB_OAUTH_CLIENT_SECRET", "client-secret")
+    settings = Settings(_env_file=None)
+    assert settings.auth_enabled
+    assert "client-secret" not in repr(settings)
+
+
+@pytest.mark.parametrize(
+    ("public_url", "redirect_uri", "secure"),
+    [
+        ("http://localhost:5173", "http://localhost:5173/api/auth/callback", False),
+        ("https://cities.example/", "https://cities.example/api/auth/callback", True),
+    ],
+)
+def test_public_url_sets_the_callback_and_cookie_security(
+    monkeypatch: pytest.MonkeyPatch, public_url: str, redirect_uri: str, secure: bool
+) -> None:
+    monkeypatch.setenv("PUBLIC_URL", public_url)
+
+    settings = Settings(_env_file=None)
+
+    assert (settings.oauth_redirect_uri, settings.secure_cookies) == (redirect_uri, secure)

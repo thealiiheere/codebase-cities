@@ -7,7 +7,6 @@ import pytest
 from app.mapping import CityLayout, build_city
 from app.mapping.city import (
     AVENUE_WIDTH,
-    FLOOR_HEIGHT,
     MAX_FOOTPRINT,
     MAX_HEIGHT,
     MAX_ROOF_LIGHTS,
@@ -16,6 +15,7 @@ from app.mapping.city import (
     PLAZA_SIZE,
     STYLE_COUNT,
 )
+from app.mapping.growth import FLOOR_HEIGHT
 from app.mapping.packing import Rect
 from app.mapping.palette import OTHER
 from tests.mapping_fakes import AS_OF, days_ago, random_user, repo, user

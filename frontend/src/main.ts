@@ -2,13 +2,14 @@
 // timeline, and the music.
 
 import "./style.css";
-import { ApiError, buildCity, type CityResponse } from "./api";
+import { Account, takeSignInError } from "./account";
+import { ApiError, buildCity, type CityResponse, type MusicParams } from "./api";
 import { CityView } from "./city/scene";
 import { Overlay } from "./overlay";
 import { currentRoute, setRoute, type CityRoute, type Route } from "./router";
-import { MusicPlayer } from "./sound/player";
-import { apiSource, demoSource } from "./sources";
-import { Timeline } from "./timeline";
+import type { MusicPlayer } from "./sound/player";
+import { apiSource, demoSource, type CitySource } from "./sources";
+import { dayBefore, formatDate, Timeline } from "./timeline";
 import {
   describeMusic,
   flashStatus,
@@ -23,25 +24,36 @@ import {
 
 const ui = getUi();
 const view = new CityView(ui.viewport);
-const player = new MusicPlayer();
+// The music player (and Tone.js, ~280 KB) is only downloaded the first time someone presses
+// Play; until then `player` is null.
+let player: MusicPlayer | null = null;
+/** The music for the year on screen, once known. */
+let music: MusicParams | null = null;
+let audioContext: AudioContext | null = null;
 const overlay = new Overlay(ui.overlay);
+const account = new Account(ui.account, {
+  openCity: (username) => void openRoute({ kind: "city", username }, { addToHistory: true }),
+  message: (text, isError = false) => (isError ? setStatus(ui, text, true) : flashStatus(ui, text)),
+});
 
 /** What the page is showing: whose city (or the demo), at which year (undefined = today). */
-let shown: { route: CityRoute; response: CityResponse } | null = null;
+let shown: { route: CityRoute; source: CitySource } | null = null;
 
 const timeline = new Timeline(ui.timeline, {
-  show: (response) => show(response, { keepCamera: true }),
+  showDate: (date) => {
+    const standing = view.setTime(date);
+    if (shown) {
+      ui.cityInfo.textContent = describeCity(shown.source.latest, standing, date);
+    }
+  },
   yearChanged: (year) => {
     if (shown) {
       // Keep the share link pointing at the year on screen (without filling the history).
-      setRoute({ ...shown.route, year }, { replace: true });
       shown.route = { ...shown.route, year };
+      setRoute(shown.route, { replace: true });
+      void syncMusic();
     }
   },
-  // While music plays, stay one bar on each year so the city and the music change together.
-  stepMilliseconds: () =>
-    player.isPlaying && shown ? (4 * 60_000) / shown.response.music.tempo_bpm : 1500,
-  showError: (message) => setStatus(ui, message, true),
 });
 
 // --- Loading cities ---
@@ -79,10 +91,7 @@ async function openCity(username: string, year?: number): Promise<void> {
     const latest = await buildCity(username, (job) => overlay.building(username, job));
     overlay.hide();
     // The URL may have used different capitalization; show the canonical lowercase login.
-    shown = { route: { kind: "city", username: latest.username, year }, response: latest };
-    setRoute({ kind: "city", username: latest.username, year }, { replace: true });
-    show(latest);
-    timeline.attach(apiSource(latest), latest, year);
+    show(apiSource(latest), { kind: "city", username: latest.username, year });
   } catch (error) {
     const message = error instanceof ApiError ? error.message : "Couldn't reach the server.";
     // Retrying can't fix an unknown or invalid username, so only offer it for errors that
@@ -97,32 +106,66 @@ async function openCity(username: string, year?: number): Promise<void> {
 async function openDemo(year?: number): Promise<void> {
   overlay.building("the demo");
   try {
-    const { source, latest } = await demoSource();
+    const source = await demoSource();
     overlay.hide();
-    shown = { route: { kind: "demo", year }, response: latest };
-    show(latest);
-    timeline.attach(source, latest, year);
+    show(source, { kind: "demo", year });
     setStatus(ui, "Demo city from a made-up profile. Enter a GitHub username to build a real one.");
   } catch {
     overlay.error("Couldn't load the demo city.", () => void openDemo(year));
   }
 }
 
-/** Draw a city and switch to its music. */
-function show(response: CityResponse, { keepCamera = false } = {}): void {
-  if (shown) {
-    shown.response = response;
-  }
-  view.show(response.city, { keepCamera });
-  player.load(response.music);
-  const repos = response.city.buildings.length;
-  const when = response.until ? `end of ${response.until.slice(0, 4)}` : `as of ${response.as_of}`;
-  ui.cityInfo.textContent = `${response.username} · ${repos} repo${repos === 1 ? "" : "s"} · ${when}`;
-  ui.nowPlaying.textContent = describeMusic(response.music);
+/** Draw a new city, with its timeline and music, and jump to the route's year (if any). */
+function show(source: CitySource, route: CityRoute): void {
+  const { latest } = source;
+  shown = { route: { ...route, year: undefined }, source };
+  setRoute(shown.route, { replace: true });
+  view.show(latest.city);
   ui.share.hidden = false;
-  // A year with no code yet has no music; keep the button usable while something is playing.
-  ui.play.disabled = !player.hasMusic && !player.isPlaying;
-  setPlayLabel(ui, player.isPlaying);
+  ui.play.disabled = latest.music.tracks.length === 0;
+  void syncMusic();
+  // The timeline starts the day before the first repo, on an empty plaza. Attaching it shows
+  // the city on the route's year, which updates the info line, link, and music.
+  const first = latest.city.buildings.map((building) => building.growth[0]?.[0]).sort()[0];
+  timeline.attach(first ? dayBefore(first) : latest.timeline.start, latest.timeline.end, route.year);
+}
+
+/** e.g. "octocat · 8 repos · as of 14 Mar 2019" */
+function describeCity(latest: CityResponse, standing: number, date: string | null): string {
+  const repos = `${standing} repo${standing === 1 ? "" : "s"}`;
+  return `${latest.username} · ${repos} · as of ${formatDate(date ?? latest.as_of)}`;
+}
+
+// Each music request gets a number, and only the newest one's answer is used: otherwise a slow
+// answer for 2017 could arrive after 2019's and replace it.
+let musicRequest = 0;
+
+/**
+ * Switch the music to the year on screen. A past year's music is only fetched once someone has
+ * pressed Play, so moving the slider costs no network for people who never listen.
+ */
+async function syncMusic(): Promise<void> {
+  const request = ++musicRequest;
+  if (shown === null) {
+    return;
+  }
+  if (player === null && shown.route.year !== undefined) {
+    music = null;
+    ui.nowPlaying.textContent = "";
+    return;
+  }
+  try {
+    const params = await shown.source.music(shown.route.year);
+    if (request === musicRequest) {
+      music = params;
+      player?.load(params);
+      ui.nowPlaying.textContent = describeMusic(params);
+    }
+  } catch {
+    if (request === musicRequest) {
+      setStatus(ui, "Couldn't load the music for this year.", true);
+    }
+  }
 }
 
 // The browser's Back and Forward buttons change the URL without reloading; follow along.
@@ -147,12 +190,29 @@ ui.dayNight.addEventListener("click", () => setDayNightLabel(ui, view.toggleDayN
 // --- Music ---
 
 ui.play.addEventListener("click", async () => {
-  if (player.isPlaying) {
+  if (player?.isPlaying) {
     player.pause();
-  } else {
-    await player.play(); // Inside the click handler, so the browser allows sound.
+    setPlayLabel(ui, false);
+    return;
   }
-  setPlayLabel(ui, player.isPlaying);
+  // This must happen right away, inside the click: browsers only let a page start audio in
+  // direct response to the user, and the download below takes a moment.
+  audioContext ??= new AudioContext();
+  void audioContext.resume();
+  try {
+    if (player === null) {
+      ui.play.textContent = "Loading…";
+      const { MusicPlayer } = await import("./sound/player");
+      player = new MusicPlayer(audioContext);
+      player.setVolume(volume);
+      if (music) player.load(music);
+      else await syncMusic();
+    }
+    await player.play();
+  } catch {
+    setStatus(ui, "Couldn't start the music.", true);
+  }
+  setPlayLabel(ui, player?.isPlaying ?? false);
 });
 
 // The volume is remembered in this browser between visits. Storage can be unavailable
@@ -169,12 +229,11 @@ function savedVolume(): number {
   }
 }
 
-const initialVolume = savedVolume();
-ui.volume.value = String(Math.round(initialVolume * 100));
-player.setVolume(initialVolume);
+let volume = savedVolume();
+ui.volume.value = String(Math.round(volume * 100));
 ui.volume.addEventListener("input", () => {
-  const volume = Number(ui.volume.value) / 100;
-  player.setVolume(volume);
+  volume = Number(ui.volume.value) / 100;
+  player?.setVolume(volume);
   try {
     localStorage.setItem(VOLUME_KEY, String(volume));
   } catch {
@@ -214,9 +273,9 @@ view.onCameraMove(() => {
 
 function updateHover(): void {
   hoverQueued = false;
-  const building = pointer && view.buildingAt(pointer.x, pointer.y);
-  if (pointer && building) {
-    showTooltip(ui, building, pointer.x, pointer.y);
+  const hit = pointer && view.buildingAt(pointer.x, pointer.y);
+  if (pointer && hit) {
+    showTooltip(ui, hit.building, hit.floors, pointer.x, pointer.y);
   } else {
     hideTooltip(ui);
   }
@@ -224,4 +283,11 @@ function updateHover(): void {
 
 // --- Start ---
 
-void openRoute(currentRoute());
+// Read (and tidy away) a failed sign-in's ?auth_error before the URL is used for anything.
+const signInError = takeSignInError();
+void openRoute(currentRoute()).then(() => {
+  if (signInError) {
+    setStatus(ui, signInError, true);
+  }
+});
+void account.load();
