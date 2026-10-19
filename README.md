@@ -29,7 +29,7 @@ deterministically from the data.
 | Repo size | Footprint (log scale) | |
 | Primary language | District and building color (GitHub's own language colors) | An instrument (top 5 languages) |
 | Share of code bytes | | That instrument's volume |
-| Commits in the last 90 days | Share of floors with lit windows at night | |
+| Commits in the last 90 days | Share of floors with lit windows at night, and how many cars drive around the district | |
 | Stars | Rooftop lights | |
 | Forks | Glowing bridges between the most-forked repos of neighboring districts | |
 | Rhythm of daily contributions | | Tempo and swing: steady is calm and even, bursty is faster and looser |
@@ -145,7 +145,7 @@ responses are cached with ETags (unchanged ones cost no rate limit).
 | `src/main.ts` | Wires the page: routes, loading, timeline, music, hover |
 | `src/account.ts` | Sign in with GitHub, "My city", sign out |
 | `src/api.ts` | Typed client mirroring the backend's response models; job polling |
-| `src/city/` | Three.js: floors drawn as instanced meshes (one draw call for every floor, shown or hidden as the timeline moves), ground and districts, bridges, day/night lighting. Draws only when something changes. |
+| `src/city/` | Three.js: floors drawn as instanced meshes (one draw call for every floor, shown or hidden as the timeline moves), ground and districts, trees, traffic, bridges, day/night lighting. Redraws only when something changes, and 30 times a second while cars drive. |
 | `src/sound/` | Tone.js: synthesized instruments and the player (switches music on bar lines). Downloaded the first time you press Play. |
 | `src/timeline.ts`, `src/sources.ts` | The timeline slider and playback; per-year music from the API or the demo files |
 | `src/router.ts` | Share links (`/city/{username}?year=`) and browser history |

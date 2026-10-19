@@ -65,9 +65,9 @@ export class GroundLayer implements NightAware {
    * Show each district with its number of standing buildings, hiding districts with none: on
    * the timeline, a district appears with its first building.
    */
-  setCounts(counts: Map<string, number>): void {
+  setCounts(counts: Map<string, { standing: number }>): void {
     for (const { language, objects, label } of this.districts) {
-      const count = counts.get(language) ?? 0;
+      const count = counts.get(language)?.standing ?? 0;
       // An invisible label is hidden on the page too (CSS2DRenderer sets display: none).
       for (const object of objects) object.visible = count > 0;
       label.textContent = `${language} · ${count}`;

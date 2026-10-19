@@ -40,7 +40,8 @@ BLOCK_LOTS = 3  # A block is BLOCK_LOTS x BLOCK_LOTS lots.
 # --- Buildings ---------------------------------------------------------------------------------
 # Floors and lit windows follow the rules in growth.py.
 MIN_HEIGHT, MAX_HEIGHT = FLOOR_HEIGHT, MAX_FLOORS * FLOOR_HEIGHT
-MIN_FOOTPRINT, MAX_FOOTPRINT = 4.0, 16.0
+# Wide enough that even a small repo reads as a building, not a pole.
+MIN_FOOTPRINT, MAX_FOOTPRINT = 7.0, 22.0
 SIZE_KB_FOR_MAX_FOOTPRINT = 500_000
 MAX_ROOF_LIGHTS = 8
 STYLE_COUNT = 4  # Visual variants the frontend can draw.

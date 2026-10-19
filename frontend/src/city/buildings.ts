@@ -11,6 +11,11 @@ const STYLE_ROOF_BOX = 3; // A small box on the roof, like a water tank or eleva
 const SETBACK_FROM = 0.75; // Floors above this share of the height get narrower...
 const SETBACK_SCALE = 0.72; // ...by this much.
 const WINDOW_GLOW = new THREE.Color("#ffcf7a");
+// At night every wall glows faintly in its building's color (like facade lighting), so the
+// language colors stay recognizable in the dark.
+const NIGHT_FACADE_GLOW = 0.28;
+// About one window per this many meters of wall.
+const WINDOW_SPACING = 3;
 
 // An instance scaled to nothing: how a floor that doesn't exist (yet) is "removed" without
 // rebuilding the mesh.
@@ -67,6 +72,8 @@ export class BuildingLayer implements NightAware {
   private readonly fixtureMeshes: THREE.InstancedMesh[] = [];
   private readonly indexOf: Map<string, number>;
   private readonly state: BuildingState[];
+  /** Shared by both wall materials' shaders: how strongly walls glow in their own color. */
+  private readonly facadeGlow = { value: 0 };
 
   constructor(private readonly buildings: Building[]) {
     this.fixtures = buildings.map(() => []);
@@ -81,6 +88,8 @@ export class BuildingLayer implements NightAware {
     this.litWalls = this.darkWalls.clone();
     this.litWalls.emissive = WINDOW_GLOW;
     this.litWalls.emissiveMap = this.textures.glow;
+    customizeWalls(this.darkWalls, this.facadeGlow);
+    customizeWalls(this.litWalls, this.facadeGlow);
     this.roofs = new THREE.MeshStandardMaterial({ color: "#9aa1a9", roughness: 0.95 });
     this.fixtureMaterial = new THREE.MeshStandardMaterial({ color: "#8b949e", metalness: 0.6, roughness: 0.4 });
     this.lightMaterial = new THREE.MeshStandardMaterial({ color: "#fff6d5", emissive: "#ffd36b" });
@@ -154,19 +163,27 @@ export class BuildingLayer implements NightAware {
     return this.state.filter((state) => state.floors > 0).length;
   }
 
-  /** Buildings standing at the current date, per district. */
-  districtCounts(): Map<string, number> {
-    const counts = new Map<string, number>();
+  /**
+   * Per district at the current date: how many buildings stand, and the sum of their window
+   * brightness (how busy the district is). Districts with nothing standing are left out.
+   */
+  districtActivity(): Map<string, { standing: number; brightness: number }> {
+    const activity = new Map<string, { standing: number; brightness: number }>();
     this.buildings.forEach((building, index) => {
-      if (this.state[index].floors > 0) {
-        counts.set(building.district, (counts.get(building.district) ?? 0) + 1);
+      const { floors, brightness } = this.state[index];
+      if (floors > 0) {
+        const district = activity.get(building.district) ?? { standing: 0, brightness: 0 };
+        district.standing += 1;
+        district.brightness += brightness;
+        activity.set(building.district, district);
       }
     });
-    return counts;
+    return activity;
   }
 
   setNight(amount: number): void {
     this.litWalls.emissiveIntensity = 1.1 * amount;
+    this.facadeGlow.value = NIGHT_FACADE_GLOW * amount;
     // Steady rather than pulsing: an animation would force a redraw every frame forever.
     this.lightMaterial.emissiveIntensity = THREE.MathUtils.lerp(0.4, 2.8, amount);
   }
@@ -317,9 +334,45 @@ function boxMatrix(x: number, y: number, z: number, width: number, height: numbe
 }
 
 /**
+ * Small additions to Three.js's standard wall shader (onBeforeCompile lets us edit the GLSL code
+ * it generates, by replacing some of its #include lines):
+ *
+ * - Windows: the texture holds 4 windows, and each floor's width comes from its instance's scale.
+ *   Repeating the texture once per WINDOW_SPACING meters gives wide buildings more windows
+ *   instead of the same 4 stretched wide.
+ * - Night glow: adds the wall's own color (texture times building color) as light it gives off,
+ *   scaled by the shared `glow` uniform.
+ */
+function customizeWalls(material: THREE.MeshStandardMaterial, glow: { value: number }): void {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.facadeGlow = glow;
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <uv_vertex>",
+      `#include <uv_vertex>
+      #ifdef USE_INSTANCING
+        // Column 0 of the instance matrix is the floor's x axis; its length is the floor's width.
+        float windowRepeat = max(2.0, floor(length(instanceMatrix[0].xyz) / ${WINDOW_SPACING.toFixed(1)} + 0.5)) / 4.0;
+        #ifdef USE_MAP
+          vMapUv.x *= windowRepeat;
+        #endif
+        #ifdef USE_EMISSIVEMAP
+          vEmissiveMapUv.x *= windowRepeat;
+        #endif
+      #endif`,
+    );
+    shader.fragmentShader = `uniform float facadeGlow;\n${shader.fragmentShader}`.replace(
+      "#include <emissivemap_fragment>",
+      `#include <emissivemap_fragment>
+      totalEmissiveRadiance += diffuseColor.rgb * facadeGlow;`,
+    );
+  };
+}
+
+/**
  * Two textures for one side of one floor, drawn on a canvas instead of loaded from image files:
  * `wall` is the surface (white so the building color shows, a darker slab line at the bottom,
- * dark glass windows); `glow` is black except the windows, which light up at night.
+ * dark glass windows); `glow` is black except the windows, which light up at night. Each holds
+ * 4 windows centered in equal cells, so it can repeat any number of windows across a wall.
  */
 function floorTextures(): { wall: THREE.CanvasTexture; glow: THREE.CanvasTexture } {
   const draw = (paint: (context: CanvasRenderingContext2D) => void) => {
@@ -333,11 +386,12 @@ function floorTextures(): { wall: THREE.CanvasTexture; glow: THREE.CanvasTexture
     paint(context);
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = THREE.RepeatWrapping; // Repeat across wide walls (see customizeWalls).
     return texture;
   };
   const windows = (context: CanvasRenderingContext2D) => {
     for (let i = 0; i < 4; i++) {
-      context.fillRect(11 + i * 30, 14, 18, 32);
+      context.fillRect(i * 32 + 7, 14, 18, 32);
     }
   };
 

@@ -15,15 +15,16 @@ const DAY = {
   sunColor: new THREE.Color("#fff3df"),
   sunIntensity: 2.6,
 };
-// Night keeps enough blue-ish ambient light that every building's color stays readable; the lit
-// windows still stand out because they glow on top of it.
+// Night lights are dimmer but nearly white. Lights multiply surface colors, so a strongly blue
+// light turned every language color into the same navy; a neutral one keeps them apart. The
+// buildings also glow faintly in their own color at night (see BuildingLayer.setNight).
 const NIGHT = {
   sky: new THREE.Color("#05070f"),
-  hemiSky: new THREE.Color("#3a4f86"),
-  hemiGround: new THREE.Color("#1a2030"),
-  hemiIntensity: 1.0,
-  sunColor: new THREE.Color("#a9bcff"), // Moonlight.
-  sunIntensity: 0.9,
+  hemiSky: new THREE.Color("#aab4d4"),
+  hemiGround: new THREE.Color("#2a2f3a"),
+  hemiIntensity: 0.55,
+  sunColor: new THREE.Color("#dfe6ff"), // Moonlight: only slightly cool.
+  sunIntensity: 0.7,
 };
 const TRANSITION_SECONDS = 1.2;
 

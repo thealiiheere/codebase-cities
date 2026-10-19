@@ -6,6 +6,11 @@ import { BridgeLayer } from "./bridges";
 import { BuildingLayer } from "./buildings";
 import { GroundLayer } from "./ground";
 import { DayNight } from "./lighting";
+import { TrafficLayer } from "./traffic";
+import { TreeLayer } from "./trees";
+
+// Cars move smoothly enough at 30 frames a second, at half the cost of 60.
+const TRAFFIC_FRAME_MS = 1000 / 30;
 
 /**
  * The 3D view: owns the renderer, camera, controls, and lights, and draws one city at a time.
@@ -14,8 +19,8 @@ import { DayNight } from "./lighting";
  * camera sees onto a <canvas>.
  *
  * It only draws when something changed (the camera moved, the light is changing, the city or
- * the timeline changed). A city standing still costs nothing, which keeps laptops cool and the
- * page responsive.
+ * the timeline changed), plus 30 times a second while cars drive. Shadows are the costliest
+ * part to draw and only change with the city or the light, so they're redrawn only then.
  */
 export class CityView {
   private readonly renderer: THREE.WebGLRenderer;
@@ -28,8 +33,16 @@ export class CityView {
   private ground?: GroundLayer;
   private buildings?: BuildingLayer;
   private bridges?: BridgeLayer;
+  private trees?: TreeLayer;
+  private traffic?: TrafficLayer;
   private lastFrame = 0;
+  private lastTrafficFrame = 0;
   private needsRender = true;
+  // Shadows only change when the city, the timeline, or the light does, not when the camera
+  // moves, so they're redrawn only then (see frame()).
+  private shadowsChanged = true;
+  // People who ask their system for less motion get parked cars.
+  private readonly reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   /** Frames actually drawn, for checking the render-on-demand behavior while developing. */
   renderCount = 0;
 
@@ -42,6 +55,7 @@ export class CityView {
     // Percentage-closer filtering smooths shadow edges. (Three.js removed the separate "soft"
     // variant; this is its replacement.)
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.autoUpdate = false;
     // Filmic tone mapping keeps bright window glow from blowing out to flat white.
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     container.appendChild(this.renderer.domElement);
@@ -73,11 +87,16 @@ export class CityView {
     this.ground = new GroundLayer(city);
     this.buildings = new BuildingLayer(city.buildings);
     this.bridges = new BridgeLayer(city);
-    this.scene.add(this.ground.group, this.buildings.group, this.bridges.group);
+    this.trees = new TreeLayer(city);
+    this.traffic = new TrafficLayer(city);
+    this.traffic.setActivity(this.buildings.districtActivity());
+    this.traffic.update(0);
+    this.scene.add(this.ground.group, this.buildings.group, this.bridges.group, this.trees.group, this.traffic.group);
 
     const radius = Math.max(city.radius, 40);
-    this.dayNight.fitCity(radius, [this.ground, this.buildings, this.bridges]);
+    this.dayNight.fitCity(radius, [this.ground, this.buildings, this.bridges, this.traffic]);
     this.frameCamera(radius);
+    this.shadowsChanged = true;
     this.requestRender();
   }
 
@@ -97,8 +116,13 @@ export class CityView {
       return 0;
     }
     if (buildings.setTime(date)) {
-      this.ground?.setCounts(buildings.districtCounts());
+      const activity = buildings.districtActivity();
+      this.ground?.setCounts(activity);
       this.bridges?.showWhen((repo) => buildings.isComplete(repo));
+      this.trees?.showDistricts(new Set(activity.keys()));
+      this.traffic?.setActivity(activity);
+      this.traffic?.update(this.lastFrame / 1000);
+      this.shadowsChanged = true;
       this.requestRender();
     }
     return buildings.standing();
@@ -137,13 +161,13 @@ export class CityView {
   }
 
   private clear(): void {
-    for (const layer of [this.ground, this.buildings, this.bridges]) {
+    for (const layer of [this.ground, this.buildings, this.bridges, this.trees, this.traffic]) {
       if (layer) {
         this.scene.remove(layer.group);
         layer.dispose(); // Free GPU memory held by geometries, materials, and textures.
       }
     }
-    this.ground = this.buildings = this.bridges = undefined;
+    this.ground = this.buildings = this.bridges = this.trees = this.traffic = undefined;
   }
 
   private frameCamera(radius: number): void {
@@ -165,12 +189,24 @@ export class CityView {
     this.controls.update();
     if (this.dayNight.update(delta)) {
       this.needsRender = true;
+      this.shadowsChanged = true; // The sun is moving.
+    }
+    // Moving cars are the one thing that needs a new frame all the time.
+    const traffic = this.traffic;
+    if (traffic?.hasCars && !this.reducedMotion.matches && time - this.lastTrafficFrame >= TRAFFIC_FRAME_MS) {
+      this.lastTrafficFrame = time;
+      traffic.update(time / 1000);
+      this.needsRender = true;
     }
     if (!this.needsRender) {
       return;
     }
     this.needsRender = false;
     this.renderCount++;
+    if (this.shadowsChanged) {
+      this.renderer.shadowMap.needsUpdate = true;
+      this.shadowsChanged = false;
+    }
     this.renderer.render(this.scene, this.camera);
     this.labelRenderer.render(this.scene, this.camera);
   }
