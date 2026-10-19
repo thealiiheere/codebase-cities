@@ -111,6 +111,9 @@ async def test_login_sends_the_visitor_to_github(
     )
     query = parse_qs(location.query)
     assert query["redirect_uri"] == ["http://test/api/auth/callback"]
+    # GitHub must let the visitor pick their account, not silently reuse whoever is logged in
+    # to github.com in this browser.
+    assert query["prompt"] == ["select_account"]
     # The browser keeps the state in a short-lived cookie, only sent back to /api/auth.
     state = query["state"][0]
     cookie = set_cookies(response)[SIGN_IN_COOKIE]

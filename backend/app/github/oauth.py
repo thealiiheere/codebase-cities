@@ -89,9 +89,20 @@ class GitHubOAuth:
         )
 
     def authorize_url(self, state: str) -> str:
-        """GitHub's page where the visitor approves signing in."""
+        """GitHub's page where the visitor approves signing in.
+
+        prompt=select_account makes GitHub always ask which account to use. Without it, GitHub
+        silently signs in whoever is logged in to github.com in this browser (once they've
+        approved the app), so on a shared or borrowed computer a visitor could end up in the
+        owner's account with no chance to pick their own.
+        """
         query = urlencode(
-            {"client_id": self._client_id, "redirect_uri": self._redirect_uri, "state": state}
+            {
+                "client_id": self._client_id,
+                "redirect_uri": self._redirect_uri,
+                "state": state,
+                "prompt": "select_account",
+            }
         )
         return f"{self._oauth_url}/login/oauth/authorize?{query}"
 

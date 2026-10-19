@@ -49,6 +49,9 @@ def test_authorize_url_asks_for_no_scopes(oauth: GitHubOAuth) -> None:
         "client_id": ["client-id"],
         "redirect_uri": [REDIRECT_URI],
         "state": ["the-state"],
+        # GitHub always asks which account to use, instead of silently reusing whoever is
+        # logged in to github.com in this browser.
+        "prompt": ["select_account"],
     }
 
 

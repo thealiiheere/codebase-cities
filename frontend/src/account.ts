@@ -75,7 +75,9 @@ export class Account {
         await signOut();
         this.render(null);
         this.actions.signedOut();
-        this.actions.message("Signed out.");
+        // Signing out here doesn't sign you out of github.com, which matters on a shared
+        // computer. (Signing in always lets you pick the account, so nobody lands in yours.)
+        this.actions.message("Signed out. On a shared computer, also sign out of github.com.");
       } catch {
         signOutButton.disabled = false;
         this.actions.message("Couldn't sign out. Please try again.", true);
