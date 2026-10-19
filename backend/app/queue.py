@@ -7,12 +7,16 @@ from arq.connections import ArqRedis
 
 from app.config import Settings
 
-# Name of the worker function that ingests a user (see app/worker.py).
+# Names of the worker functions that ingest a user's public repos, or the private repos they
+# shared (see app/worker.py).
 INGEST_USER_JOB = "ingest_user"
+INGEST_PRIVATE_JOB = "ingest_private"
 
 
 class JobQueue(Protocol):
     async def enqueue_ingestion(self, job_id: uuid.UUID) -> None: ...
+
+    async def enqueue_private_ingestion(self, job_id: uuid.UUID) -> None: ...
 
 
 class ArqJobQueue:
@@ -23,6 +27,10 @@ class ArqJobQueue:
         # Reusing our job id as ARQ's id makes ARQ ignore a second enqueue of the same job,
         # and makes ARQ's logs line up with our jobs table.
         await self._redis.enqueue_job(INGEST_USER_JOB, str(job_id), _job_id=str(job_id))
+
+    async def enqueue_private_ingestion(self, job_id: uuid.UUID) -> None:
+        # Only the job id travels through Redis; the worker reads the (encrypted) token itself.
+        await self._redis.enqueue_job(INGEST_PRIVATE_JOB, str(job_id), _job_id=str(job_id))
 
     async def aclose(self) -> None:
         await self._redis.aclose()

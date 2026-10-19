@@ -25,6 +25,8 @@ class GithubUser(Base):
     created_at: Mapped[dt.datetime]
     # When we last ingested this user from GitHub.
     fetched_at: Mapped[dt.datetime]
+    # When we last fetched the private repos they shared (null if they never did).
+    private_fetched_at: Mapped[dt.datetime | None]
 
     # lazy="raise" turns accidental lazy loads (which fail in async code) into a clear error;
     # load these explicitly with selectinload() instead.

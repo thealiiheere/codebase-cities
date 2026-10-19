@@ -7,12 +7,13 @@ from redis.asyncio import Redis
 
 from app.cache import ETAG_KEY_PREFIX, ETAG_TTL_SECONDS, RedisCityCache, RedisEtagStore
 from app.github.etag import CachedResponse
-from app.queue import INGEST_USER_JOB, ArqJobQueue
+from app.queue import INGEST_PRIVATE_JOB, INGEST_USER_JOB, ArqJobQueue
 from app.worker import WorkerSettings, shutdown
 
 
-def test_worker_runs_the_job_the_queue_enqueues() -> None:
-    assert [function.__name__ for function in WorkerSettings.functions] == [INGEST_USER_JOB]
+def test_worker_runs_the_jobs_the_queue_enqueues() -> None:
+    names = [function.__name__ for function in WorkerSettings.functions]
+    assert names == [INGEST_USER_JOB, INGEST_PRIVATE_JOB]
 
 
 async def test_worker_shutdown_tolerates_a_failed_startup() -> None:

@@ -27,9 +27,10 @@ def user_row(profile: UserProfile, fetched_at: dt.datetime) -> Row:
     }
 
 
-def repo_row(user_id: int, repo: RepoInfo) -> Row:
+def repo_row(user_id: int, repo: RepoInfo, *, is_private: bool = False) -> Row:
     return {
         "user_id": user_id,
+        "is_private": is_private,
         "github_id": repo.github_id,
         "name": repo.name,
         "stars": repo.stars,

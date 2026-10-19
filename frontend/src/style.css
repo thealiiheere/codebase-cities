@@ -275,6 +275,16 @@ button:disabled {
   text-decoration: underline;
 }
 
+/* A link styled like the link buttons ("Share private repos" goes to GitHub). */
+a.link-button {
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+a.link-button:hover {
+  text-decoration: underline;
+}
+
 /* --- Timeline --- */
 
 .timeline {

@@ -9,7 +9,7 @@ import respx
 from pydantic import SecretStr
 
 from app.config import Settings
-from app.github.oauth import GitHubOAuth, OAuthError
+from app.github.oauth import GitHubOAuth, OAuthError, UserToken
 
 OAUTH_URL = "https://github.test"
 API_URL = "https://api.github.test"
@@ -58,9 +58,12 @@ async def test_sign_in_trades_the_code_and_asks_who_it_is(
     token = respx_mock.post(TOKEN_URL).respond(json={"access_token": "gho_x", "scope": ""})
     user = respx_mock.get(USER_URL).respond(json=USER)
 
-    profile = await oauth.sign_in("the-code")
+    signed_in = await oauth.sign_in("the-code")
 
+    profile = signed_in.profile
     assert (profile.github_id, profile.login, profile.name) == (7, "Hubot", None)
+    # Without expiry fields in GitHub's answer, the token never expires and can't be renewed.
+    assert signed_in.token == UserToken(access_token="gho_x")
     sent = parse_qs(token.calls.last.request.content.decode())
     assert sent == {
         "client_id": ["client-id"],

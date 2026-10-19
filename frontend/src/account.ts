@@ -1,10 +1,11 @@
 // Signing in with GitHub. Optional: the server says whether it's set up (GET /api/auth/me).
 //
-// Signing in doesn't change what anyone can see (every city is public). It adds a "My city"
-// shortcut and a higher limit on building new cities. The session lives in an HttpOnly cookie
-// that the browser sends by itself, so this code never sees a token or a session id.
+// Signing in adds a "My city" shortcut, a higher limit on building new cities, and (when the
+// server is set up for it) the private repos you choose to share, shown only to you. The session
+// lives in an HttpOnly cookie that the browser sends by itself, so this code never sees a token
+// or a session id.
 
-import { getAuthStatus, signInUrl, signOut, type AuthUser } from "./api";
+import { getAuthStatus, signInUrl, signOut, type AuthStatus, type AuthUser } from "./api";
 
 /** Messages for the ?auth_error=<code> the server adds when a sign-in fails. */
 const SIGN_IN_ERRORS: Record<string, string> = {
@@ -17,6 +18,8 @@ const SIGN_IN_ERRORS: Record<string, string> = {
 export interface AccountActions {
   openCity(username: string): void;
   message(text: string, isError?: boolean): void;
+  /** Signed out: the server has forgotten the private repos you shared. */
+  signedOut(): void;
 }
 
 /** The account controls at the right end of the top bar. */
@@ -26,20 +29,22 @@ export class Account {
     private readonly actions: AccountActions,
   ) {}
 
-  /** Ask the server who is signed in, and show the matching controls. */
-  async load(): Promise<void> {
+  /** Ask the server who is signed in, show the matching controls, and return what it said. */
+  async load(): Promise<AuthStatus | null> {
     try {
       const status = await getAuthStatus();
       if (status.enabled) {
-        this.render(status.user);
+        this.render(status.user, status.private_repos?.install_url ?? null);
       }
+      return status;
     } catch {
       // No backend (like the static demo) or a hiccup: simply offer no sign-in.
       this.root.hidden = true;
+      return null;
     }
   }
 
-  private render(user: AuthUser | null): void {
+  private render(user: AuthUser | null, installUrl: string | null = null): void {
     this.root.hidden = false;
     if (user === null) {
       const signIn = button("Sign in with GitHub");
@@ -69,14 +74,41 @@ export class Account {
       try {
         await signOut();
         this.render(null);
+        this.actions.signedOut();
         this.actions.message("Signed out.");
       } catch {
         signOutButton.disabled = false;
         this.actions.message("Couldn't sign out. Please try again.", true);
       }
     });
-    this.root.replaceChildren(myCity, signOutButton);
+    const controls: HTMLElement[] = [myCity];
+    if (installUrl !== null) {
+      // GitHub's page for choosing which private repos the site may read. Afterwards GitHub
+      // sends you back here (see takeAppSetup), and they're fetched right away.
+      const share = document.createElement("a");
+      share.href = installUrl;
+      share.className = "link-button";
+      share.textContent = "🔒 Share private repos";
+      share.title = "Choose which private repos appear in your city. Only you will see them.";
+      controls.push(share);
+    }
+    this.root.replaceChildren(...controls, signOutButton);
   }
+}
+
+/**
+ * True when GitHub just sent you back from choosing private repos to share (it adds
+ * setup_action and installation_id to the address). Removes those from the address bar.
+ */
+export function takeAppSetup(): boolean {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("setup_action")) {
+    return false;
+  }
+  url.searchParams.delete("setup_action");
+  url.searchParams.delete("installation_id");
+  window.history.replaceState(null, "", url.pathname + url.search);
+  return true;
 }
 
 /**

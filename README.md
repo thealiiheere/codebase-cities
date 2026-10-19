@@ -9,7 +9,8 @@ to watch the city grow from the first commit to today: buildings rise floor by f
 commits land, windows light up and go dark with each repo's activity, and the music evolves
 year by year.
 
-Search for anyone's city, or sign in with GitHub to jump straight to your own.
+Search for anyone's city, or sign in with GitHub to jump straight to your own, and add the
+private repos you choose to share: they appear only in your own view of your city.
 
 The same profile always produces the same city and the same tune: everything is derived
 deterministically from the data.
@@ -56,7 +57,8 @@ docker compose up --build
 
 Open http://localhost:5173 and enter a GitHub username. Share links look like
 `/city/octocat`, or `/city/octocat?year=2015` for a point on the timeline. To offer
-**Sign in with GitHub**, see [below](#sign-in-with-github-optional).
+**Sign in with GitHub** and private repos, see
+[below](#sign-in-with-github-and-private-repos-optional).
 
 ## Architecture
 
@@ -122,8 +124,9 @@ sequenceDiagram
 | --- | --- |
 | `app/api/` | FastAPI routers, kept thin: they validate input and call services |
 | `app/services/` | Orchestration: requesting cities, job bookkeeping, the ingestion job, serving and caching cities, signing in |
-| `app/github/` | Async GitHub client: GraphQL for data (commit history batched 10 repos per query), REST with ETags for profiles, rate limit handling, retries; the OAuth sign-in flow |
+| `app/github/` | Async GitHub client: GraphQL for data (commit history batched 10 repos per query), REST with ETags for profiles, rate limit handling, retries; the GitHub App sign-in flow |
 | `app/sessions.py`, `app/limiter.py` | Redis-backed sign-in sessions, and the per-visitor rate limit |
+| `app/token_cipher.py` | Encrypts the GitHub tokens kept for private repos |
 | `app/ingestion/` | Fetch → normalize (pure) → store (one transaction) |
 | `app/mapping/` | **Pure functions**: data → city layout and music. No I/O, no clock, no global randomness; seeded per username. |
 | `app/models/`, `migrations/` | SQLAlchemy 2.0 async models and Alembic migrations |
@@ -201,12 +204,13 @@ If a Postgres already runs on your machine's port 5432, set `POSTGRES_HOST_PORT=
 | Request | Result |
 | --- | --- |
 | `POST /api/cities/{username}` | `200` + the city when stored data is fresh; `202` + a job (and `Location` header) when it must be fetched; `404` for unknown users; `429` (code `rate_limited`, with `Retry-After`) when this client has asked for too many new cities; `503` when GitHub is rate limited (with `Retry-After`) |
-| `GET /api/cities/{username}?until=YYYY-MM-DD` | The city layout and music, optionally as of the end of a past day; `404` until the city has been built once |
+| `GET /api/cities/{username}?until=YYYY-MM-DD` | The city layout and music, optionally as of the end of a past day; `404` until the city has been built once. Add `private=true` for your own city with your private repos (`403` for anyone else's) |
+| `POST /api/me/private-city?refresh=false` | Your city with the private repos you shared: `200` + the city, or `202` + a job while they're fetched; `401` signed out, `409` when you need to sign in again |
 | `GET /api/jobs/{job_id}` | The job: `queued`, `fetching`, `building`, `done`, or `failed` (with a readable `error`) |
 | `GET /api/auth/login?next=/path` | Redirects to GitHub to sign in, then back to `next` (your own city by default); `404` when sign-in isn't set up |
 | `GET /api/auth/callback` | Where GitHub sends visitors back; sets the session cookie. A failed sign-in returns to `/?auth_error=...` |
-| `GET /api/auth/me` | `{"enabled": ..., "user": {"login", "name", "avatar_url"} or null}` |
-| `POST /api/auth/logout` | Ends the session (`204`) |
+| `GET /api/auth/me` | `{"enabled": ..., "user": {"login", "name", "avatar_url"} or null, "private_repos": {"install_url"} or null}` |
+| `POST /api/auth/logout` | Ends the session (`204`), and deletes your stored GitHub tokens and private repos |
 | `GET /api/health` | `200` when Postgres and Redis respond, else `503` |
 
 Errors always look like `{"error": {"code": "...", "message": "..."}}`. Interactive docs are
@@ -221,24 +225,51 @@ visitors are counted per GitHub account instead, with a higher limit (30 an hour
 `RATE_LIMIT_NEW_CITIES`, `RATE_LIMIT_NEW_CITIES_SIGNED_IN`, and `RATE_LIMIT_WINDOW_SECONDS` in
 `.env` (`RATE_LIMIT_NEW_CITIES=0` turns both limits off).
 
-## Sign in with GitHub (optional)
+## Sign in with GitHub and private repos (optional)
 
 Signing in adds a **My city** shortcut and the higher rate limit; every city stays public and
-searchable without it. Cities are always built with the server's own `GITHUB_TOKEN`: the
-visitor's GitHub token is used once to learn who they are, then dropped. It's never stored, and
-no scopes are requested. The session is a random id in an HttpOnly, SameSite=Lax cookie (Secure
-on https), with only a hash of it kept in Redis.
+searchable without it. Signed in, you can also **share private repos**: you pick which ones on
+GitHub, and they appear in your city only when you look at it while signed in. Everyone else,
+including people opening your share links, sees the public city.
 
-1. On GitHub: **Settings → Developer settings → OAuth Apps → New OAuth App**
-   (https://github.com/settings/developers).
-   - Homepage URL: where the site runs, e.g. `http://localhost:5173` or
-     `https://codebase-cities.onrender.com`.
-   - Authorization callback URL: the same address + `/api/auth/callback`.
-   An OAuth App has one callback URL, so use separate apps for development and production.
-2. Generate a client secret, then set `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, and
-   `PUBLIC_URL` (the same address as the Homepage URL) in `.env`, or on Render in the API
-   service's **Environment** tab.
-3. Restart the API. A **Sign in with GitHub** button appears at the right of the top bar.
+How it stays private:
+
+- Sign-in uses a **GitHub App** with **read-only** permissions, and it can only read the repos
+  you choose when installing it. (An OAuth App would need the `repo` scope: full read and write
+  access to every private repo.)
+- Public cities are built with the server's own `GITHUB_TOKEN`. Your private repos are fetched
+  with your own token, which is kept **encrypted** (`TOKEN_ENCRYPTION_KEY`) so they can be
+  refreshed later; it expires after 8 hours and is renewed with its refresh token.
+- Private repos are stored apart from public ones and never in the public city or its cache.
+  Responses that include them are marked `Cache-Control: private, no-store`.
+- **Signing out deletes** your stored tokens and your private repos from the server. To stop
+  sharing completely, also uninstall the app on GitHub (Settings → Applications).
+- The session is a random id in an HttpOnly, SameSite=Lax cookie (Secure on https), with only a
+  hash of it kept in Redis.
+
+Setting it up:
+
+1. On GitHub: **Settings → Developer settings → GitHub Apps → New GitHub App**
+   (https://github.com/settings/apps/new).
+   - **Homepage URL:** where the site runs, e.g. `https://codebase-cities.onrender.com`.
+   - **Callback URL:** the same address + `/api/auth/callback`.
+   - Keep **Expire user authorization tokens** on. Leave **Request user authorization (OAuth)
+     during installation** off (signing in already does that).
+   - **Setup URL:** the site's address (e.g. `https://codebase-cities.onrender.com`), with
+     **Redirect on update** on, so people come back after choosing repos.
+   - **Webhook:** turn **Active** off (the site doesn't use webhooks).
+   - **Permissions → Repository:** **Contents: Read-only** (Metadata: Read-only is added
+     automatically). Nothing else.
+   - **Where can this GitHub App be installed?** **Any account**, so visitors can install it.
+   Use separate apps for development (`http://localhost:5173`) and production.
+2. On the app's page, note its **Client ID** and generate a **client secret**. Its URL name (the
+   end of `https://github.com/apps/<slug>`) is the slug.
+3. Set `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `GITHUB_APP_SLUG`,
+   `TOKEN_ENCRYPTION_KEY` (any long random string), and `PUBLIC_URL` in `.env`, or on Render in
+   the API service's **Environment** tab. Without the slug and the key, sign-in still works but
+   private repos are off.
+4. Restart the API. **Sign in with GitHub** appears at the right of the top bar, and once signed
+   in, **🔒 Share private repos**.
 
 ## Deployment
 
@@ -284,8 +315,8 @@ paid Background Worker (the comment at the top of `render.yaml` says how).
 3. When the deploy finishes, check the API's URL. If it isn't
    `https://codebase-cities-api.onrender.com`, put the real one in the `/api/*` rewrite of the
    website in `render.yaml`, then push. Likewise, `PUBLIC_URL` must be the website's address.
-   To offer sign-in, set up an OAuth App as described in
-   [Sign in with GitHub](#sign-in-with-github-optional).
+   To offer sign-in and private repos, set up a GitHub App as described in
+   [Sign in with GitHub](#sign-in-with-github-and-private-repos-optional).
 4. Open the website's URL and build a city. Then look at the API's logs: each request shows the
    visitor's address. If every request shows the same address, set `FORWARDED_ALLOW_IPS` to
    `*` on the API service, or the rate limit would count all visitors as one.
@@ -299,7 +330,9 @@ real data, upgrade the free Postgres, because Render removes free databases afte
 - **History is approximate.** GitHub has no cheap star, fork, size, or language history, so the
   timeline keeps today's values for those and only replays repos and commits. Commit history is
   capped per repo (newest 5,000 by default); older totals are exact, their dates are not.
-- **Public data only.** Private repos never appear, even when the token can see them.
+- **Private repos are opt-in and owner-only.** Without signing in and sharing them, only public
+  repos appear, even when the server's token could see more. Shared private repos refresh when
+  you open your city (every 12 hours) or right after you change the selection on GitHub.
 - **The rate limit is per IP address** (per account for signed-in visitors). It stops one
   visitor from spending your token's quota, but not many addresses working together, and
   visitors who share an address (an office network, say) share one limit. It's a fixed window, so a client can fit up to twice the

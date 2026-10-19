@@ -93,6 +93,7 @@ class Building(_Frozen):
     forks: int
     commits: int
     recent_commits: int
+    private: bool
 
 
 class Bridge(_Frozen):
@@ -269,6 +270,7 @@ def _building(
         forks=repo.forks,
         commits=repo.total_commits,
         recent_commits=recent,
+        private=repo.private,
     )
 
 

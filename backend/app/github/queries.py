@@ -3,19 +3,8 @@
 # GitHub's maximum page size for connections.
 MAX_PAGE_SIZE = 100
 
-# Repos the user owns, public and not forks, most recently pushed first. privacy: PUBLIC matters
-# when someone looks up the token's own account, which would otherwise include private repos.
-REPOS_QUERY = """
-query UserRepos($login: String!, $first: Int!, $after: String) {
-  user(login: $login) {
-    repositories(
-      first: $first
-      after: $after
-      ownerAffiliations: [OWNER]
-      isFork: false
-      privacy: PUBLIC
-      orderBy: {field: PUSHED_AT, direction: DESC}
-    ) {
+# What we read about each repo (shared by the public and private repo queries).
+_REPO_CONNECTION = """
       pageInfo { hasNextPage endCursor }
       nodes {
         databaseId
@@ -35,10 +24,50 @@ query UserRepos($login: String!, $first: Int!, $after: String) {
           }
         }
       }
-    }
+"""
+
+# Repos the user owns, public and not forks, most recently pushed first. privacy: PUBLIC matters
+# when someone looks up the token's own account, which would otherwise include private repos.
+REPOS_QUERY = (
+    """
+query UserRepos($login: String!, $first: Int!, $after: String) {
+  user(login: $login) {
+    repositories(
+      first: $first
+      after: $after
+      ownerAffiliations: [OWNER]
+      isFork: false
+      privacy: PUBLIC
+      orderBy: {field: PUSHED_AT, direction: DESC}
+    ) {"""
+    + _REPO_CONNECTION
+    + """    }
   }
 }
 """
+)
+
+# The token owner's own private repos (not forks), most recently pushed first. With a GitHub
+# App's user token, GitHub only returns the repos the user chose to share with the app.
+VIEWER_PRIVATE_REPOS_QUERY = (
+    """
+query ViewerPrivateRepos($first: Int!, $after: String) {
+  viewer {
+    login
+    repositories(
+      first: $first
+      after: $after
+      ownerAffiliations: [OWNER]
+      isFork: false
+      privacy: PRIVATE
+      orderBy: {field: PUSHED_AT, direction: DESC}
+    ) {"""
+    + _REPO_CONNECTION
+    + """    }
+  }
+}
+"""
+)
 
 CONTRIBUTION_YEARS_QUERY = """
 query ContributionYears($login: String!) {

@@ -21,6 +21,7 @@ def test_all_tables_are_registered() -> None:
         "repo_languages",
         "daily_commits",
         "jobs",
+        "user_tokens",
     }
 
 

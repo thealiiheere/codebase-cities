@@ -1,13 +1,18 @@
-"""Sign in with GitHub: the OAuth web flow for a GitHub OAuth App.
+"""Sign in with GitHub: the web flow for a GitHub App (an OAuth App works the same way).
 
 1. The visitor is sent to GitHub's authorize page, with a random `state` we remember.
 2. GitHub sends them back to our callback with a one-time `code` and that same state.
-3. We trade the code for an access token and use it once, to ask GitHub who they are.
+3. We trade the code for a user access token and ask GitHub who they are.
 
-The token is then dropped: we only need to know who signed in, never to act as them. No scopes
-are requested, so the token could only read public information anyway.
+A GitHub App's token can only do what the app's permissions allow (here: read-only access to
+the repos the user chose to share), and expires after a few hours; the refresh token that comes
+with it gets a new one. What happens to the tokens is up to the caller (see
+app/services/user_tokens.py).
 """
 
+import datetime as dt
+from collections.abc import Callable
+from dataclasses import dataclass
 from types import TracebackType
 from typing import Self
 from urllib.parse import urlencode
@@ -25,6 +30,30 @@ class OAuthError(GitHubError):
     """The sign-in failed: an expired or reused code, or GitHub misbehaving or unreachable."""
 
 
+@dataclass(frozen=True)
+class UserToken:
+    """A user's access token, and the refresh token that renews it (expiry times in UTC).
+
+    Without "expire user authorization tokens" in the app's settings, GitHub sends no expiry and
+    no refresh token: the access token then lasts until the user revokes it.
+    """
+
+    access_token: str
+    access_expires_at: dt.datetime | None = None
+    refresh_token: str | None = None
+    refresh_expires_at: dt.datetime | None = None
+
+
+@dataclass(frozen=True)
+class SignedInUser:
+    profile: UserProfile
+    token: UserToken
+
+
+def _utcnow() -> dt.datetime:
+    return dt.datetime.now(dt.UTC)
+
+
 class GitHubOAuth:
     def __init__(
         self,
@@ -35,7 +64,9 @@ class GitHubOAuth:
         oauth_url: str = "https://github.com",
         api_url: str = "https://api.github.com",
         timeout_seconds: float = 15,
+        clock: Callable[[], dt.datetime] = _utcnow,
     ) -> None:
+        self._clock = clock
         self._client_id = client_id
         self._client_secret = client_secret
         self._redirect_uri = redirect_uri
@@ -64,29 +95,44 @@ class GitHubOAuth:
         )
         return f"{self._oauth_url}/login/oauth/authorize?{query}"
 
-    async def sign_in(self, code: str) -> UserProfile:
-        """Who the visitor is, from the code GitHub sent back. Raises OAuthError."""
-        token = await self._exchange(code)
-        return await self._user(token)
+    async def sign_in(self, code: str) -> SignedInUser:
+        """Who the visitor is, and their tokens, from the code GitHub sent back.
 
-    async def _exchange(self, code: str) -> str:
+        Raises OAuthError.
+        """
+        token = await self._token(
+            {"code": code, "redirect_uri": self._redirect_uri}, refused="GitHub refused the code."
+        )
+        return SignedInUser(profile=await self._user(token.access_token), token=token)
+
+    async def refresh(self, refresh_token: str) -> UserToken:
+        """New tokens for an expired access token. Raises OAuthError (e.g. when the refresh token
+        expired too, or the user revoked the app)."""
+        return await self._token(
+            {"grant_type": "refresh_token", "refresh_token": refresh_token},
+            refused="GitHub refused to renew the sign-in.",
+        )
+
+    async def _token(self, form: dict[str, str], *, refused: str) -> UserToken:
+        now = self._clock()
         response = await self._send(
             "POST",
             f"{self._oauth_url}/login/oauth/access_token",
             headers={"Accept": "application/json"},
-            data={
-                "client_id": self._client_id,
-                "client_secret": self._client_secret,
-                "code": code,
-                "redirect_uri": self._redirect_uri,
-            },
+            data={"client_id": self._client_id, "client_secret": self._client_secret, **form},
         )
         body = _json_object(response)
-        token = body.get("access_token")
-        if not isinstance(token, str) or not token:
-            # An expired or reused code still gets a 200, with {"error": ..., "error_description"}.
-            raise OAuthError(str(body.get("error_description") or "GitHub refused the code."))
-        return token
+        access = body.get("access_token")
+        if not isinstance(access, str) or not access:
+            # A bad code or refresh token still gets a 200, with {"error", "error_description"}.
+            raise OAuthError(str(body.get("error_description") or refused))
+        refresh = body.get("refresh_token")
+        return UserToken(
+            access_token=access,
+            access_expires_at=_expiry(now, body.get("expires_in")),
+            refresh_token=refresh if isinstance(refresh, str) and refresh else None,
+            refresh_expires_at=_expiry(now, body.get("refresh_token_expires_in")),
+        )
 
     async def _user(self, token: str) -> UserProfile:
         response = await self._send(
@@ -127,6 +173,12 @@ class GitHubOAuth:
         traceback: TracebackType | None,
     ) -> None:
         await self.aclose()
+
+
+def _expiry(now: dt.datetime, seconds: object) -> dt.datetime | None:
+    if isinstance(seconds, int) and seconds > 0:
+        return now + dt.timedelta(seconds=seconds)
+    return None
 
 
 def _json_object(response: httpx.Response) -> dict[str, object]:

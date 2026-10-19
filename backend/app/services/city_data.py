@@ -17,16 +17,22 @@ class StoredUser:
     fetched_at: dt.datetime
 
 
-async def load_user_data(session: AsyncSession, login: str) -> StoredUser | None:
+async def load_user_data(
+    session: AsyncSession, login: str, *, include_private: bool = False
+) -> StoredUser | None:
     """Everything stored for one (lowercase) login, or None if it was never ingested.
 
+    Private repos are left out unless `include_private` (only ever for the owner's own city).
     Five small queries (user, repos, languages, commits, contributions) instead of one big join,
     which would repeat every repo row once per language per day.
     """
     user = await session.scalar(select(GithubUser).where(GithubUser.login == login))
     if user is None:
         return None
-    repos = (await session.scalars(select(Repo).where(Repo.user_id == user.id))).all()
+    query = select(Repo).where(Repo.user_id == user.id)
+    if not include_private:
+        query = query.where(Repo.is_private.is_(False))
+    repos = (await session.scalars(query)).all()
     repo_ids = [repo.id for repo in repos]
 
     languages: dict[int, dict[str, int]] = defaultdict(dict)
@@ -69,6 +75,7 @@ async def load_user_data(session: AsyncSession, login: str) -> StoredUser | None
                 pushed_at=repo.pushed_at,
                 total_commits=repo.total_commits,
                 daily_commits=commits[repo.id],
+                private=repo.is_private,
             )
             for repo in repos
         ),

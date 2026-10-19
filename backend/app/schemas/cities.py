@@ -22,5 +22,7 @@ class CityResponse(BaseModel):
     # The requested timeline date, or null for the latest city.
     until: dt.date | None
     timeline: Timeline
+    # How many of the buildings are private repos (only ever non-zero for their owner).
+    private_repos: int = 0
     city: CityLayout
     music: MusicParams

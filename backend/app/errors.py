@@ -59,6 +59,31 @@ class AuthDisabledError(NotFoundError):
     code = "auth_disabled"
 
 
+class PrivateReposDisabledError(NotFoundError):
+    """This server isn't set up to show private repos."""
+
+    code = "private_repos_disabled"
+
+
+class NotSignedInError(AppError):
+    status_code = 401
+    code = "not_signed_in"
+
+
+class PrivateCityForbiddenError(AppError):
+    """Someone asked for the private repos in a city that isn't theirs."""
+
+    status_code = 403
+    code = "private_city_forbidden"
+
+
+class PrivateAccessError(AppError):
+    """No usable GitHub token for the user's private repos: they need to sign in again."""
+
+    status_code = 409
+    code = "private_access_needed"
+
+
 class GitHubRateLimitedError(ServiceUnavailableError):
     code = "github_rate_limited"
 

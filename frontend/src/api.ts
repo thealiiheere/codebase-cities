@@ -31,6 +31,8 @@ export interface Building {
   forks: number;
   commits: number;
   recent_commits: number;
+  /** A private repo its owner shared: only ever in their own view of their city. */
+  private: boolean;
 }
 
 export interface District {
@@ -91,6 +93,8 @@ export interface CityResponse {
   as_of: string;
   until: string | null;
   timeline: { start: string; end: string };
+  /** How many buildings are private repos (only ever non-zero in your own city). */
+  private_repos: number;
   city: CityLayout;
   music: MusicParams;
 }
@@ -147,8 +151,19 @@ export async function getJob(id: string): Promise<Job> {
   return (await request<Job>("GET", `/api/jobs/${encodeURIComponent(id)}`)).body;
 }
 
-export async function getCity(username: string, until?: string): Promise<CityResponse> {
-  const query = until ? `?until=${encodeURIComponent(until)}` : "";
+/**
+ * A built city, today's or (with `until`) as it was at the end of a past day. `includePrivate`
+ * adds the private repos you shared, and only works for your own city.
+ */
+export async function getCity(
+  username: string,
+  until?: string,
+  { includePrivate = false } = {},
+): Promise<CityResponse> {
+  const params = new URLSearchParams();
+  if (until) params.set("until", until);
+  if (includePrivate) params.set("private", "true");
+  const query = params.toString() ? `?${params}` : "";
   return (await request<CityResponse>("GET", cityPath(username) + query)).body;
 }
 
@@ -164,6 +179,8 @@ export interface AuthStatus {
   /** False when the server has no GitHub OAuth App set up: offer no sign-in. */
   enabled: boolean;
   user: AuthUser | null;
+  /** Set when you're signed in and the server can show private repos. */
+  private_repos: { install_url: string } | null;
 }
 
 /** Whether sign-in is available, and who is signed in (the browser sends the session cookie). */
@@ -200,7 +217,32 @@ export async function buildCity(
   if (first.kind === "ready") {
     return first.city;
   }
-  let job = first.job;
+  await waitForJob(first.job, onProgress, pollIntervalMs);
+  return getCity(username);
+}
+
+/**
+ * Your own city with the private repos you shared, waiting while they're fetched (with your
+ * GitHub token, on the server). `refresh` fetches them again even if they're recent.
+ */
+export async function buildPrivateCity(
+  onProgress: (job: Job) => void,
+  { refresh = false } = {},
+  pollIntervalMs = 1000,
+): Promise<CityResponse> {
+  const path = `/api/me/private-city${refresh ? "?refresh=true" : ""}`;
+  const { status, body } = await request<CityResponse | Job>("POST", path);
+  if (status !== 202) {
+    return body as CityResponse;
+  }
+  const job = body as Job;
+  await waitForJob(job, onProgress, pollIntervalMs);
+  return getCity(job.username, undefined, { includePrivate: true });
+}
+
+/** Poll a job until it's done; throws if it fails. */
+async function waitForJob(first: Job, onProgress: (job: Job) => void, pollIntervalMs: number): Promise<void> {
+  let job = first;
   onProgress(job);
   while (job.status !== "done") {
     if (job.status === "failed") {
@@ -210,5 +252,4 @@ export async function buildCity(
     job = await getJob(job.id);
     onProgress(job);
   }
-  return getCity(username);
 }

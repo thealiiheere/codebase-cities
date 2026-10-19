@@ -16,6 +16,7 @@ from app.limiter import RateLimiter, Requester
 from app.queue import JobQueue
 from app.services.auth import current_user
 from app.sessions import SESSION_COOKIE, SessionStore
+from app.token_cipher import TokenCipher
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
@@ -61,6 +62,11 @@ def get_oauth(request: Request) -> GitHubOAuth | None:
     return cast(GitHubOAuth | None, request.app.state.oauth)
 
 
+def get_token_cipher(request: Request) -> TokenCipher | None:
+    # None when private repos aren't set up.
+    return cast(TokenCipher | None, getattr(request.app.state, "token_cipher", None))
+
+
 def get_session_store(request: Request) -> SessionStore:
     return cast(SessionStore, request.app.state.sessions)
 
@@ -89,5 +95,6 @@ RateLimiterDep = Annotated[RateLimiter | None, Depends(get_rate_limiter)]
 ClientIpDep = Annotated[str, Depends(get_client_ip)]
 OAuthDep = Annotated[GitHubOAuth | None, Depends(get_oauth)]
 SessionStoreDep = Annotated[SessionStore, Depends(get_session_store)]
+TokenCipherDep = Annotated[TokenCipher | None, Depends(get_token_cipher)]
 CurrentUserDep = Annotated[UserProfile | None, Depends(get_current_user)]
 RequesterDep = Annotated[Requester, Depends(get_requester)]

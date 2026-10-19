@@ -41,9 +41,15 @@ class CachedSource implements CitySource {
   }
 }
 
-/** A real user's city. A past year's music comes from that year's city on the server. */
-export function apiSource(latest: CityResponse): CitySource {
-  return new CachedSource(latest, async (until) => (await getCity(latest.username, until)).music);
+/**
+ * A real user's city. A past year's music comes from that year's city on the server (with the
+ * private repos too, for your own city with `includePrivate`).
+ */
+export function apiSource(latest: CityResponse, { includePrivate = false } = {}): CitySource {
+  return new CachedSource(
+    latest,
+    async (until) => (await getCity(latest.username, until, { includePrivate })).music,
+  );
 }
 
 /** The demo profile: today's city, plus a bundled file with the music at the end of each year. */

@@ -97,11 +97,42 @@ class FakeQueue:
     def __init__(self, error: Exception | None = None) -> None:
         self.error = error
         self.enqueued: list[uuid.UUID] = []
+        self.private_enqueued: list[uuid.UUID] = []
 
     async def enqueue_ingestion(self, job_id: uuid.UUID) -> None:
         if self.error:
             raise self.error
         self.enqueued.append(job_id)
+
+    async def enqueue_private_ingestion(self, job_id: uuid.UUID) -> None:
+        if self.error:
+            raise self.error
+        self.private_enqueued.append(job_id)
+
+
+class FakePrivateGitHub:
+    """Serves the private repos shared by the token's owner, and records the token it was made
+    for and whether it was closed."""
+
+    def __init__(self, login: str, repos: list[RepoInfo], token: str = "") -> None:
+        self.login = login
+        self.repos = repos
+        self.token = token
+        self.closed = False
+
+    async def get_own_private_repos(self, limit: int) -> tuple[str, list[RepoInfo]]:
+        return self.login, self.repos[:limit]
+
+    async def get_commit_history(
+        self, owner: str, repo_names: list[str], *, since: dt.datetime | None = None
+    ) -> dict[str, CommitHistory]:
+        return {
+            name: CommitHistory(repo_name=name, committed_at=(), complete=True)
+            for name in repo_names
+        }
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 class FakeCityCache:

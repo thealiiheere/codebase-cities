@@ -14,7 +14,8 @@ REPO_NAME_MAX_LENGTH = 100
 
 
 class Repo(Base):
-    """A public, non-fork repository owned by a GitHub user."""
+    """A non-fork repository owned by a GitHub user: public, or private and shared with us by
+    its owner (shown only to them)."""
 
     __tablename__ = "repos"
 
@@ -35,6 +36,8 @@ class Repo(Base):
     # Every commit on the default branch. daily_commits can hold fewer, because fetched history
     # is capped per repo, so use this for anything that needs the true total.
     total_commits: Mapped[int] = mapped_column(server_default=text("0"))
+    # Private repos come from the owner's own token and are only ever shown to the owner.
+    is_private: Mapped[bool] = mapped_column(server_default=text("false"))
 
     user: Mapped["GithubUser"] = relationship(back_populates="repos", lazy="raise")
     languages: Mapped[list["RepoLanguage"]] = relationship(

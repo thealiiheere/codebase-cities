@@ -24,6 +24,8 @@ class RepoData(_Frozen):
     total_commits: int
     # Commits per UTC day. Days without commits are absent.
     daily_commits: dict[dt.date, int]
+    # A private repo its owner shared; only ever in the city shown to that owner.
+    private: bool = False
 
 
 class UserData(_Frozen):

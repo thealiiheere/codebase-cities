@@ -14,11 +14,19 @@ from typing import Annotated
 from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 
-from app.api.deps import CurrentUserDep, OAuthDep, SessionStoreDep, SettingsDep
+from app.api.deps import (
+    CurrentUserDep,
+    OAuthDep,
+    SessionDep,
+    SessionStoreDep,
+    SettingsDep,
+    TokenCipherDep,
+)
 from app.config import Settings
-from app.schemas.auth import AuthStatus, AuthUser
+from app.schemas.auth import AuthStatus, AuthUser, PrivateRepos
 from app.schemas.errors import ErrorResponse
 from app.services.auth import MAX_NEXT_LENGTH, SignInError, finish_sign_in, sign_out, start_sign_in
+from app.services.user_tokens import forget_private_data, remember_sign_in
 from app.sessions import SESSION_COOKIE, SIGN_IN_COOKIE, SIGN_IN_TTL_SECONDS
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -55,6 +63,8 @@ async def callback(
     oauth: OAuthDep,
     sessions: SessionStoreDep,
     settings: SettingsDep,
+    db: SessionDep,
+    cipher: TokenCipherDep,
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
@@ -71,6 +81,8 @@ async def callback(
     except SignInError as failure:
         response = RedirectResponse(f"/?auth_error={failure.code}", status.HTTP_302_FOUND)
     else:
+        # Kept (encrypted) only when the server shows private repos; otherwise dropped here.
+        await remember_sign_in(db, cipher, signed_in.user.github_id, signed_in.token)
         response = RedirectResponse(signed_in.next_path, status.HTTP_302_FOUND)
         max_age = round(settings.session_ttl_days * 24 * 3600)
         _set_cookie(response, settings, SESSION_COOKIE, signed_in.session_id, max_age, "/")
@@ -80,14 +92,29 @@ async def callback(
 
 @router.get("/me", response_model=AuthStatus)
 async def me(settings: SettingsDep, user: CurrentUserDep) -> AuthStatus:
+    install_url = settings.app_install_url
+    private = user is not None and settings.private_repos_enabled and install_url is not None
     return AuthStatus(
-        enabled=settings.auth_enabled, user=AuthUser.from_profile(user) if user else None
+        enabled=settings.auth_enabled,
+        user=AuthUser.from_profile(user) if user else None,
+        private_repos=PrivateRepos(install_url=install_url) if private and install_url else None,
     )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(request: Request, sessions: SessionStoreDep, settings: SettingsDep) -> Response:
+async def logout(
+    request: Request,
+    sessions: SessionStoreDep,
+    settings: SettingsDep,
+    db: SessionDep,
+    cipher: TokenCipherDep,
+    user: CurrentUserDep,
+) -> Response:
+    """End the session. Signing out also deletes the user's stored GitHub tokens and the private
+    repos they shared: the server keeps nothing private once they leave."""
     await sign_out(sessions, request.cookies.get(SESSION_COOKIE))
+    if user is not None and cipher is not None:
+        await forget_private_data(db, user.github_id)
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     _set_cookie(response, settings, SESSION_COOKIE, "", 0, "/")  # Delete it.
     return response

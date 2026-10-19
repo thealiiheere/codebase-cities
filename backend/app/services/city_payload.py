@@ -28,14 +28,23 @@ def effective_until(until: dt.date | None, fetched_at: dt.datetime) -> dt.date |
     return until
 
 
-def cache_key(username: str, fetched_at: dt.datetime, until: dt.date | None) -> str:
+def cache_key(
+    username: str,
+    fetched_at: dt.datetime,
+    until: dt.date | None,
+    private_fetched_at: dt.datetime | None = None,
+) -> str:
     """Redis key for one rendered city.
 
-    It includes the mapping version and the fetch time, so a new algorithm or fresh data
-    produces new keys: stale cities are never served, they just expire.
+    It includes the mapping version and the fetch times, so a new algorithm or fresh data
+    produces new keys: stale cities are never served, they just expire. A city with private
+    repos has its own key (with "p<time>"), so it can never be served as the public one.
     """
     moment = until.isoformat() if until else "latest"
-    return f"city:v{MAPPING_VERSION}:{username}:{int(fetched_at.timestamp())}:{moment}"
+    fetched = str(int(fetched_at.timestamp()))
+    if private_fetched_at is not None:
+        fetched += f":p{int(private_fetched_at.timestamp())}"
+    return f"city:v{MAPPING_VERSION}:{username}:{fetched}:{moment}"
 
 
 def build_payload(data: UserData, fetched_at: dt.datetime, until: dt.date | None) -> CityResponse:
@@ -52,34 +61,47 @@ def build_payload(data: UserData, fetched_at: dt.datetime, until: dt.date | None
         as_of=as_of,
         until=until,
         timeline=Timeline(start=data.created_at.date(), end=fetched_at.date()),
+        private_repos=sum(repo.private for repo in data.repos),
         city=build_city(view, as_of=as_of, layout=data),
         music=build_music(view, as_of=as_of),
     )
 
 
 async def get_city_json(
-    session: AsyncSession, cache: CityCache, username: str, until: dt.date | None = None
+    session: AsyncSession,
+    cache: CityCache,
+    username: str,
+    until: dt.date | None = None,
+    *,
+    include_private: bool = False,
 ) -> str:
     """The city for a user as JSON text, from the cache when possible.
 
-    Raises CityNotFoundError when the user was never ingested.
+    With `include_private` (only ever for the owner), the private repos they shared are part of
+    the city too, if any were fetched. Raises CityNotFoundError when the user was never ingested.
     """
     username = normalize_login(username)
-    fetched_at = await session.scalar(
-        select(GithubUser.fetched_at).where(GithubUser.login == username)
-    )
-    if fetched_at is None:
+    row = (
+        await session.execute(
+            select(GithubUser.fetched_at, GithubUser.private_fetched_at).where(
+                GithubUser.login == username
+            )
+        )
+    ).first()
+    if row is None:
         raise CityNotFoundError(
             f"No city for '{username}' yet. POST /api/cities/{username} to build it."
         )
+    fetched_at, private_fetched_at = row
+    with_private = include_private and private_fetched_at is not None
     until = effective_until(until, fetched_at)
-    key = cache_key(username, fetched_at, until)
+    key = cache_key(username, fetched_at, until, private_fetched_at if with_private else None)
 
     cached = await _cache_get(cache, key)
     if cached is not None:
         return cached
 
-    stored = await load_user_data(session, username)
+    stored = await load_user_data(session, username, include_private=with_private)
     if stored is None:  # Deleted between the two queries.
         raise CityNotFoundError(f"No city for '{username}' yet.")
     body = build_payload(stored.data, stored.fetched_at, until).model_dump_json()

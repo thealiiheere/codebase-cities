@@ -1,18 +1,20 @@
 """Step 3: write a user's fetched data to PostgreSQL, replacing what was there.
 
-Call store_user_data inside a single transaction: readers then see either the old data or the
-new data, never a half-written mix.
+Call these inside a single transaction: readers then see either the old data or the new data,
+never a half-written mix. Public and private repos are refreshed separately (by different jobs,
+with different tokens), so each only ever replaces its own kind.
 """
 
 import datetime as dt
 from collections.abc import Sequence
 
-from sqlalchemy import delete, insert
+from sqlalchemy import delete, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import ColumnElement
 
-from app.ingestion.fetch import FetchedUserData
+from app.github.models import CommitHistory, RepoInfo
+from app.ingestion.fetch import FetchedPrivateRepos, FetchedUserData
 from app.ingestion.normalize import (
     Row,
     commit_rows,
@@ -35,6 +37,8 @@ _REPO_UPDATE_COLUMNS = (
     "created_at",
     "pushed_at",
     "total_commits",
+    # A repo whose visibility changed moves to the other kind.
+    "is_private",
 )
 
 
@@ -43,27 +47,61 @@ async def store_user_data(
 ) -> int:
     """Store everything for one user and return their database id."""
     user_id = await _upsert_user(session, user_row(data.profile, fetched_at))
-    repo_ids = await _upsert_repos(session, [repo_row(user_id, repo) for repo in data.repos])
+    await _store_repos(session, user_id, data.repos, data.histories, is_private=False)
+    contributions = contribution_rows(user_id, data.calendar)
+    await _replace(session, DailyContribution, DailyContribution.user_id == user_id, contributions)
+    return user_id
+
+
+async def store_private_repos(
+    session: AsyncSession, user_id: int, data: FetchedPrivateRepos, *, fetched_at: dt.datetime
+) -> None:
+    """Replace the private repos a user shared, for the github_users row `user_id`."""
+    await _store_repos(session, user_id, data.repos, data.histories, is_private=True)
+    await session.execute(
+        update(GithubUser).where(GithubUser.id == user_id).values(private_fetched_at=fetched_at)
+    )
+
+
+async def delete_private_repos(session: AsyncSession, github_id: int) -> None:
+    """Forget the private repos a user shared (when they sign out)."""
+    user_id = select(GithubUser.id).where(GithubUser.github_id == github_id).scalar_subquery()
+    await session.execute(delete(Repo).where(Repo.user_id == user_id, Repo.is_private))
+    await session.execute(
+        update(GithubUser).where(GithubUser.github_id == github_id).values(private_fetched_at=None)
+    )
+
+
+async def _store_repos(
+    session: AsyncSession,
+    user_id: int,
+    repos: list[RepoInfo],
+    histories: dict[str, CommitHistory],
+    *,
+    is_private: bool,
+) -> None:
+    rows = [repo_row(user_id, repo, is_private=is_private) for repo in repos]
+    repo_ids = await _upsert_repos(session, rows)
     ids = list(repo_ids.values())
 
-    # Repos that were deleted, made private, or dropped out of the top N disappear, along with
-    # their languages and commits (ON DELETE CASCADE).
-    await session.execute(delete(Repo).where(Repo.user_id == user_id, Repo.id.not_in(ids)))
+    # Repos of this kind that were deleted, changed visibility, stopped being shared, or dropped
+    # out of the top N disappear, with their languages and commits (ON DELETE CASCADE).
+    await session.execute(
+        delete(Repo).where(
+            Repo.user_id == user_id, Repo.is_private.is_(is_private), Repo.id.not_in(ids)
+        )
+    )
 
-    languages = [row for r in data.repos for row in language_rows(repo_ids[r.name], r.languages)]
+    languages = [row for r in repos for row in language_rows(repo_ids[r.name], r.languages)]
     await _replace(session, RepoLanguage, RepoLanguage.repo_id.in_(ids), languages)
 
     commits = [
         row
-        for name, history in data.histories.items()
+        for name, history in histories.items()
         if name in repo_ids
         for row in commit_rows(repo_ids[name], history)
     ]
     await _replace(session, DailyCommit, DailyCommit.repo_id.in_(ids), commits)
-
-    contributions = contribution_rows(user_id, data.calendar)
-    await _replace(session, DailyContribution, DailyContribution.user_id == user_id, contributions)
-    return user_id
 
 
 async def _upsert_user(session: AsyncSession, row: Row) -> int:

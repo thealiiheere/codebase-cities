@@ -2,8 +2,16 @@
 // timeline, and the music.
 
 import "./style.css";
-import { Account, takeSignInError } from "./account";
-import { ApiError, buildCity, type CityResponse, type MusicParams } from "./api";
+import { Account, takeAppSetup, takeSignInError } from "./account";
+import {
+  ApiError,
+  buildCity,
+  buildPrivateCity,
+  getCity,
+  type AuthStatus,
+  type CityResponse,
+  type MusicParams,
+} from "./api";
 import { CityView } from "./city/scene";
 import { Overlay } from "./overlay";
 import { currentRoute, setRoute, type CityRoute, type Route } from "./router";
@@ -34,10 +42,24 @@ const overlay = new Overlay(ui.overlay);
 const account = new Account(ui.account, {
   openCity: (username) => void openRoute({ kind: "city", username }, { addToHistory: true }),
   message: (text, isError = false) => (isError ? setStatus(ui, text, true) : flashStatus(ui, text)),
+  signedOut: () => {
+    auth = auth && { ...auth, user: null, private_repos: null };
+    // The server just forgot your private repos; stop showing them.
+    if (shown?.private && shown.route.kind === "city") {
+      void showPublic(shown.route.username);
+    }
+    updatePrivateToggle();
+  },
 });
+/** Who is signed in (null until known, or without a backend). */
+let auth: AuthStatus | null = null;
+const authReady = account.load().then((status) => (auth = status));
 
-/** What the page is showing: whose city (or the demo), at which year (undefined = today). */
-let shown: { route: CityRoute; source: CitySource } | null = null;
+/**
+ * What the page is showing: whose city (or the demo), at which year (undefined = today), and
+ * whether it includes your private repos.
+ */
+let shown: { route: CityRoute; source: CitySource; private: boolean } | null = null;
 
 const timeline = new Timeline(ui.timeline, {
   showDate: (date) => {
@@ -92,6 +114,7 @@ async function openCity(username: string, year?: number): Promise<void> {
     overlay.hide();
     // The URL may have used different capitalization; show the canonical lowercase login.
     show(apiSource(latest), { kind: "city", username: latest.username, year });
+    void addPrivateRepos(latest.username);
   } catch (error) {
     const message = error instanceof ApiError ? error.message : "Couldn't reach the server.";
     // Retrying can't fix an unknown or invalid username, so only offer it for errors that
@@ -115,12 +138,15 @@ async function openDemo(year?: number): Promise<void> {
   }
 }
 
-/** Draw a new city, with its timeline and music, and jump to the route's year (if any). */
-function show(source: CitySource, route: CityRoute): void {
+/**
+ * Draw a city, with its timeline and music, and jump to the route's year (if any). Redrawing
+ * the same city (e.g. with your private repos added) passes keepCamera.
+ */
+function show(source: CitySource, route: CityRoute, { keepCamera = false, includesPrivate = false } = {}): void {
   const { latest } = source;
-  shown = { route: { ...route, year: undefined }, source };
+  shown = { route: { ...route, year: undefined }, source, private: includesPrivate };
   setRoute(shown.route, { replace: true });
-  view.show(latest.city);
+  view.show(latest.city, { keepCamera });
   ui.share.hidden = false;
   ui.play.disabled = latest.music.tracks.length === 0;
   void syncMusic();
@@ -128,13 +154,106 @@ function show(source: CitySource, route: CityRoute): void {
   // the city on the route's year, which updates the info line, link, and music.
   const first = latest.city.buildings.map((building) => building.growth[0]?.[0]).sort()[0];
   timeline.attach(first ? dayBefore(first) : latest.timeline.start, latest.timeline.end, route.year);
+  updatePrivateToggle();
 }
 
-/** e.g. "octocat · 8 repos · as of 14 Mar 2019" */
+/** e.g. "octocat · 8 repos · as of 14 Mar 2019", noting when private repos are included. */
 function describeCity(latest: CityResponse, standing: number, date: string | null): string {
   const repos = `${standing} repo${standing === 1 ? "" : "s"}`;
-  return `${latest.username} · ${repos} · as of ${formatDate(date ?? latest.as_of)}`;
+  const secret = latest.private_repos > 0 ? " (with your private ones)" : "";
+  return `${latest.username} · ${repos}${secret} · as of ${formatDate(date ?? latest.as_of)}`;
 }
+
+// --- Your private repos ---
+
+// Whether you want to see your private repos in your own city (remembered in this browser).
+// Turning it off shows your city as everyone else sees it.
+const PRIVATE_KEY = "codebase-cities:show-private";
+
+function wantsPrivate(): boolean {
+  try {
+    return localStorage.getItem(PRIVATE_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+/** True when you're signed in, viewing your own city, and the server can show private repos. */
+function isOwnCity(username: string): boolean {
+  return Boolean(auth?.user && auth.private_repos && auth.user.login.toLowerCase() === username);
+}
+
+// GitHub just sent you back from choosing which private repos to share: fetch them again.
+let refreshPrivate = takeAppSetup();
+// Like musicRequest: only the newest request's answer is shown.
+let privateRequest = 0;
+
+/** Redraw your own city with your private repos, fetching them first if needed. */
+async function addPrivateRepos(username: string): Promise<void> {
+  await authReady;
+  if (!isOwnCity(username) || !wantsPrivate()) {
+    updatePrivateToggle();
+    return;
+  }
+  const request = ++privateRequest;
+  const refresh = refreshPrivate;
+  refreshPrivate = false;
+  setStatus(ui, "Adding your private repos…");
+  try {
+    const full = await buildPrivateCity(() => undefined, { refresh });
+    if (request !== privateRequest || shown?.route.kind !== "city" || shown.route.username !== username) {
+      return; // You moved on to another city meanwhile.
+    }
+    show(apiSource(full, { includePrivate: true }), shown.route, { keepCamera: true, includesPrivate: true });
+    flashStatus(
+      ui,
+      full.private_repos > 0
+        ? `Added ${full.private_repos} private repo${full.private_repos === 1 ? "" : "s"}. Only you can see them.`
+        : "No private repos shared yet: use “Share private repos” to choose some.",
+      5000,
+    );
+  } catch (error) {
+    if (request !== privateRequest) return;
+    const message =
+      error instanceof ApiError && error.code === "private_access_needed"
+        ? "To add your private repos, sign out and sign in again."
+        : error instanceof ApiError
+          ? error.message
+          : "Couldn't load your private repos.";
+    setStatus(ui, message, true);
+  }
+}
+
+/** Show your city as everyone else sees it. */
+async function showPublic(username: string): Promise<void> {
+  privateRequest++; // Drop any private request still in flight.
+  try {
+    const latest = await getCity(username);
+    if (shown?.route.kind === "city" && shown.route.username === username) {
+      show(apiSource(latest), shown.route, { keepCamera: true });
+    }
+  } catch {
+    setStatus(ui, "Couldn't reload the city.", true);
+  }
+}
+
+/** The "private repos" switch: only on your own city. */
+function updatePrivateToggle(): void {
+  const own = shown?.route.kind === "city" && isOwnCity(shown.route.username);
+  ui.privateToggle.hidden = !own;
+  ui.privateToggle.textContent = shown?.private ? "🔒 Hide private repos" : "🔒 Show private repos";
+}
+
+ui.privateToggle.addEventListener("click", () => {
+  if (shown?.route.kind !== "city") return;
+  const on = !shown.private;
+  try {
+    localStorage.setItem(PRIVATE_KEY, on ? "on" : "off");
+  } catch {
+    // Not remembered this time; the switch still works.
+  }
+  void (on ? addPrivateRepos(shown.route.username) : showPublic(shown.route.username));
+});
 
 // Each music request gets a number, and only the newest one's answer is used: otherwise a slow
 // answer for 2017 could arrive after 2019's and replace it.
@@ -285,9 +404,17 @@ function updateHover(): void {
 
 // Read (and tidy away) a failed sign-in's ?auth_error before the URL is used for anything.
 const signInError = takeSignInError();
-void openRoute(currentRoute()).then(() => {
+void (async () => {
+  let route = currentRoute();
+  // Back from choosing private repos on GitHub: go to your own city to see them.
+  if (refreshPrivate) {
+    const status = await authReady;
+    if (status?.user) {
+      route = { kind: "city", username: status.user.login };
+    }
+  }
+  await openRoute(route);
   if (signInError) {
     setStatus(ui, signInError, true);
   }
-});
-void account.load();
+})();

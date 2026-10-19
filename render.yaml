@@ -1,7 +1,7 @@
 # Render Blueprint: creates every Codebase Cities service on Render from this repository, all on
 # free plans. In the Render dashboard: New > Blueprint, pick this repo, then fill in
-# GITHUB_TOKEN when asked (and the GitHub OAuth App's credentials, to offer sign-in). Plans and
-# prices change; check render.com/pricing.
+# GITHUB_TOKEN when asked (and the GitHub App's details, to offer sign-in and private repos).
+# Plans and prices change; check render.com/pricing.
 #
 # To run the worker as its own always-on service instead (a paid Background Worker), add a
 # `type: worker` service with `dockerCommand: arq app.worker.WorkerSettings` and the same
@@ -27,12 +27,17 @@ services:
         value: production
       - key: GITHUB_TOKEN
         sync: false # Render asks for the value when you create the Blueprint.
-      # Sign in with GitHub (optional; see "Sign in with GitHub" in the README). Left empty, the
-      # site simply offers no sign-in.
+      # Sign in with GitHub and private repos (optional; see "Sign in with GitHub" in the README).
+      # Left empty, the site simply offers no sign-in.
       - key: GITHUB_OAUTH_CLIENT_ID
         sync: false
       - key: GITHUB_OAUTH_CLIENT_SECRET
         sync: false
+      - key: GITHUB_APP_SLUG
+        sync: false
+      # Encrypts the GitHub tokens kept for private repos. Render makes up a random value.
+      - key: TOKEN_ENCRYPTION_KEY
+        generateValue: true
       # The website's address. GitHub sends visitors back to this + /api/auth/callback, and
       # https here makes the sign-in cookies Secure.
       - key: PUBLIC_URL

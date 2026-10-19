@@ -29,6 +29,7 @@ from app.github.queries import (
     CONTRIBUTION_YEARS_QUERY,
     MAX_PAGE_SIZE,
     REPOS_QUERY,
+    VIEWER_PRIVATE_REPOS_QUERY,
     build_calendar_query,
     build_history_query,
 )
@@ -82,6 +83,26 @@ class GitHubClient:
                 break
             cursor = connection.page_info.end_cursor
         return repos[:limit]
+
+    async def get_own_private_repos(self, limit: int) -> tuple[str, list[RepoInfo]]:
+        """The token owner's login and their private, non-fork repos (those the token may read),
+        most recently pushed first, at most `limit`."""
+        repos: list[RepoInfo] = []
+        login = ""
+        cursor: str | None = None
+        while len(repos) < limit:
+            variables = {"first": min(limit - len(repos), MAX_PAGE_SIZE), "after": cursor}
+            result = await self._transport.graphql(VIEWER_PRIVATE_REPOS_QUERY, variables)
+            if result.errors:
+                raise GitHubApiError(f"GitHub GraphQL error: {result.errors[0].message}")
+            viewer = cast(dict[str, Any], result.data.get("viewer") or {})
+            login = str(viewer.get("login", login))
+            connection = UserRepos.model_validate(viewer).repositories
+            repos.extend(node.to_repo_info() for node in connection.nodes)
+            if not connection.page_info.has_next_page:
+                break
+            cursor = connection.page_info.end_cursor
+        return login, repos[:limit]
 
     async def get_contribution_calendar(self, login: str) -> list[ContributionDay]:
         """Every day of the contributions calendar since the account's first active year."""
@@ -205,8 +226,15 @@ def _user_data(result: GraphQLResult, login: str) -> dict[str, Any]:
     return cast(dict[str, Any], user)
 
 
-def create_github_client(settings: Settings, etag_store: EtagStore | None = None) -> GitHubClient:
-    token = settings.github_token.get_secret_value() if settings.github_token else ""
+def create_github_client(
+    settings: Settings, etag_store: EtagStore | None = None, *, token: str | None = None
+) -> GitHubClient:
+    """A client using the server's GITHUB_TOKEN, or `token` (a user's own) when given.
+
+    A user's client must not share the ETag cache: its responses can include private data.
+    """
+    if token is None:
+        token = settings.github_token.get_secret_value() if settings.github_token else ""
     transport = GitHubTransport(
         token,
         base_url=settings.github_api_url,

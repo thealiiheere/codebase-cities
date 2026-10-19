@@ -1,7 +1,8 @@
 """Signing in with GitHub: starting a sign-in, finishing it, and who is signed in.
 
-Signing in only identifies the visitor (for the "My city" shortcut and a higher rate limit).
-Cities are always built with the server's own GITHUB_TOKEN.
+Signing in identifies the visitor (for the "My city" shortcut and a higher rate limit). Public
+cities are always built with the server's own GITHUB_TOKEN; the visitor's own token is only used
+for the private repos they choose to share (see app/services/user_tokens.py).
 """
 
 import logging
@@ -9,7 +10,7 @@ from dataclasses import dataclass
 
 from app.errors import AuthDisabledError
 from app.github.models import UserProfile
-from app.github.oauth import GitHubOAuth, OAuthError
+from app.github.oauth import GitHubOAuth, OAuthError, UserToken
 from app.sessions import SessionStore
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,8 @@ class SignInStarted:
 class SignedIn:
     session_id: str
     user: UserProfile
+    # Their GitHub tokens, for the caller to keep (encrypted) or drop.
+    token: UserToken
     # Where to send the visitor now.
     next_path: str
 
@@ -74,13 +77,14 @@ async def finish_sign_in(
     if next_path is None:
         raise SignInError("expired")
     try:
-        user = await oauth.sign_in(code)
+        signed_in = await oauth.sign_in(code)
     except OAuthError as exc:
         logger.warning("GitHub sign-in failed: %s", exc)
         raise SignInError("github") from exc
+    user = signed_in.profile
     session_id = await sessions.create(user)
     # Signing in from the home page lands on your own city.
-    return SignedIn(session_id, user, next_path or f"/city/{user.login.lower()}")
+    return SignedIn(session_id, user, signed_in.token, next_path or f"/city/{user.login.lower()}")
 
 
 async def current_user(sessions: SessionStore, session_id: str | None) -> UserProfile | None:

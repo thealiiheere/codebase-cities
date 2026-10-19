@@ -22,35 +22,45 @@ async def get_job(session: AsyncSession, job_id: uuid.UUID) -> Job:
 
 
 async def find_active_job(
-    session: AsyncSession, username: str, *, now: dt.datetime, stale_after: dt.timedelta
+    session: AsyncSession,
+    username: str,
+    *,
+    now: dt.datetime,
+    stale_after: dt.timedelta,
+    private: bool = False,
 ) -> Job | None:
-    """The user's unfinished job, if any. Jobs that look dead are marked failed first."""
+    """The user's unfinished job of this kind, if any. Jobs that look dead are marked failed
+    first."""
     await session.execute(
         update(Job)
         .where(
             Job.username == username,
+            Job.private.is_(private),
             Job.status.in_(ACTIVE_JOB_STATUSES),
             Job.created_at < now - stale_after,
         )
         .values(status=JobStatus.FAILED, error=STALE_JOB_MESSAGE, finished_at=now)
     )
     await session.commit()
-    return await _active_job(session, username)
+    return await _active_job(session, username, private)
 
 
-async def create_job(session: AsyncSession, username: str) -> tuple[Job, bool]:
+async def create_job(
+    session: AsyncSession, username: str, *, private: bool = False
+) -> tuple[Job, bool]:
     """Create a queued job. Returns (job, created).
 
-    If another request created an active job for this user in the meantime, the unique index
-    rejects our insert and we return theirs with created=False, so only one gets enqueued.
+    If another request created an active job of the same kind for this user in the meantime, the
+    unique index rejects our insert and we return theirs with created=False, so only one gets
+    enqueued.
     """
-    job = Job(username=username, status=JobStatus.QUEUED)
+    job = Job(username=username, status=JobStatus.QUEUED, private=private)
     session.add(job)
     try:
         await session.commit()
     except IntegrityError:
         await session.rollback()
-        existing = await _active_job(session, username)
+        existing = await _active_job(session, username, private)
         if existing is None:
             raise
         return existing, False
@@ -77,7 +87,11 @@ async def finish_job(
     await session.commit()
 
 
-async def _active_job(session: AsyncSession, username: str) -> Job | None:
+async def _active_job(session: AsyncSession, username: str, private: bool) -> Job | None:
     return await session.scalar(
-        select(Job).where(Job.username == username, Job.status.in_(ACTIVE_JOB_STATUSES))
+        select(Job).where(
+            Job.username == username,
+            Job.private.is_(private),
+            Job.status.in_(ACTIVE_JOB_STATUSES),
+        )
     )

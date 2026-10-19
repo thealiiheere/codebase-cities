@@ -22,16 +22,19 @@ ACTIVE_JOB_STATUSES = (JobStatus.QUEUED, JobStatus.FETCHING, JobStatus.BUILDING)
 
 
 class Job(Base):
-    """One ingestion run for a username, polled by the frontend."""
+    """One ingestion run for a username, polled by the frontend: of their public repos, or of
+    the private repos they shared (with their own token)."""
 
     __tablename__ = "jobs"
     __table_args__ = (
         CheckConstraint("username = lower(username)", name="username_lowercase"),
-        # A partial unique index: at most one *active* job per username. Two simultaneous
-        # requests can't both start an ingestion; the second insert fails and reuses the first.
+        # A partial unique index: at most one *active* job per username (and kind). Two
+        # simultaneous requests can't both start an ingestion; the second insert fails and
+        # reuses the first.
         Index(
-            "uq_jobs_username_active",
+            "uq_jobs_username_private_active",
             "username",
+            "private",
             unique=True,
             postgresql_where=text("status IN ('queued', 'fetching', 'building')"),
         ),
@@ -52,6 +55,7 @@ class Job(Base):
         ),
         default=JobStatus.QUEUED,
     )
+    private: Mapped[bool] = mapped_column(server_default=text("false"))
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[dt.datetime] = mapped_column(server_default=func.now())
     finished_at: Mapped[dt.datetime | None]

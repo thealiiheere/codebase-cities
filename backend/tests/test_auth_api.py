@@ -13,7 +13,7 @@ import respx
 from fastapi import FastAPI
 from pydantic import SecretStr
 
-from app.api.deps import get_oauth, get_session_store
+from app.api.deps import get_oauth, get_session, get_session_store
 from app.config import Settings
 from app.github.oauth import GitHubOAuth
 from app.sessions import SESSION_COOKIE, SIGN_IN_COOKIE
@@ -65,8 +65,14 @@ async def oauth(settings: Settings, respx_mock: respx.MockRouter) -> AsyncIterat
 
 @pytest.fixture(autouse=True)
 def wired(app: FastAPI, oauth: GitHubOAuth, sessions: FakeSessionStore) -> None:
+    async def no_database() -> AsyncIterator[None]:
+        # Private repos are off here (no TOKEN_ENCRYPTION_KEY), so nothing touches the database;
+        # test_private_repos.py covers them against a real one.
+        yield None
+
     app.dependency_overrides[get_oauth] = lambda: oauth
     app.dependency_overrides[get_session_store] = lambda: sessions
+    app.dependency_overrides[get_session] = no_database
 
 
 @pytest.fixture
@@ -131,6 +137,7 @@ async def test_signing_in_starts_a_session_and_returns_to_the_page(
     assert me.json() == {
         "enabled": True,
         "user": {"login": "Hubot", "name": "Hubot Robot", "avatar_url": "https://avatars.test/7"},
+        "private_repos": None,  # Not set up on this server.
     }
     # Only the public profile is kept: the GitHub token is used once and dropped.
     [user] = sessions.sessions.values()
@@ -224,7 +231,7 @@ async def test_a_code_github_refuses_goes_back_with_an_error(
 async def test_nobody_is_signed_in_at_first(client: httpx.AsyncClient) -> None:
     response = await client.get("/api/auth/me")
 
-    assert response.json() == {"enabled": True, "user": None}
+    assert response.json() == {"enabled": True, "user": None, "private_repos": None}
 
 
 async def test_signing_out_ends_the_session(
@@ -263,6 +270,6 @@ async def test_without_an_oauth_app_there_is_no_sign_in(
     me = await client.get("/api/auth/me")
     login = await client.get("/api/auth/login")
 
-    assert me.json() == {"enabled": False, "user": None}
+    assert me.json() == {"enabled": False, "user": None, "private_repos": None}
     assert login.status_code == 404
     assert login.json()["error"]["code"] == "auth_disabled"

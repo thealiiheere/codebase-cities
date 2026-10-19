@@ -73,6 +73,13 @@ class Settings(BaseSettings):
     public_url: str = "http://localhost:5173"
     session_ttl_days: float = Field(default=30, gt=0)
 
+    # Private repos (optional, needs sign-in to be a GitHub App): the app's URL name, for the
+    # "choose private repos" link (github.com/apps/<slug>/installations/new)...
+    github_app_slug: str | None = None
+    # ...and any long random string, from which the key that encrypts stored GitHub tokens is
+    # derived. Changing it makes stored tokens unreadable: people simply sign in again.
+    token_encryption_key: SecretStr | None = None
+
     @field_validator("public_url")
     @classmethod
     def strip_trailing_slash(cls, url: str) -> str:
@@ -83,6 +90,19 @@ class Settings(BaseSettings):
         # Empty values (e.g. a blank line in .env) count as not configured.
         secret = self.github_oauth_client_secret
         return bool(self.github_oauth_client_id) and bool(secret and secret.get_secret_value())
+
+    @property
+    def private_repos_enabled(self) -> bool:
+        key = self.token_encryption_key
+        has_key = bool(key and key.get_secret_value())
+        return self.auth_enabled and bool(self.github_app_slug) and has_key
+
+    @property
+    def app_install_url(self) -> str | None:
+        """Where a signed-in user picks which private repos to share."""
+        if not self.github_app_slug:
+            return None
+        return f"{self.github_oauth_url}/apps/{self.github_app_slug}/installations/new"
 
     @property
     def oauth_redirect_uri(self) -> str:

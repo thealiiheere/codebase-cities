@@ -19,6 +19,7 @@ export interface Ui {
   nowPlaying: HTMLElement;
   tooltip: HTMLElement;
   account: HTMLElement;
+  privateToggle: HTMLButtonElement;
 }
 
 function find<T extends HTMLElement>(selector: string): T {
@@ -52,6 +53,7 @@ export function getUi(): Ui {
     nowPlaying: find("#now-playing"),
     tooltip: find("#tooltip"),
     account: find("#account"),
+    privateToggle: find("#private-toggle"),
   };
 }
 
@@ -124,6 +126,9 @@ export function showTooltip(ui: Ui, building: Building, floors: number, x: numbe
         : "Quiet for the last 90 days",
     ),
   );
+  if (building.private) {
+    ui.tooltip.append(line("🔒 Private: only you can see this"));
+  }
   ui.tooltip.hidden = false;
   // Keep the tooltip on screen near the right and bottom edges.
   const { offsetWidth: width, offsetHeight: height } = ui.tooltip;

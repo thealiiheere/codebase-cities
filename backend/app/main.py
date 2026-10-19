@@ -18,6 +18,7 @@ from app.github.oauth import GitHubOAuth
 from app.limiter import create_rate_limiter
 from app.queue import create_job_queue
 from app.sessions import create_session_store
+from app.token_cipher import create_token_cipher
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -45,6 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.github = github
         app.state.oauth = oauth
         app.state.sessions = create_session_store(redis, resolved)
+        app.state.token_cipher = create_token_cipher(resolved)
         try:
             yield
         finally:
